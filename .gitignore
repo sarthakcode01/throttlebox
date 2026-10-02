@@ -1,13 +1,14 @@
 # Dependencies
 node_modules/
-.pnpm-store/
-
-# Build output
 dist/
 build/
 .next/
 out/
 *.tsbuildinfo
+.turbo/
+coverage/
+playwright-report/
+test-results/
 
 # Environment
 .env
@@ -35,3 +36,7 @@ Thumbs.db
 # Local data
 *.sqlite
 docker/
+
+# scratch files
+tmp-*.json
+tmp-*.txt

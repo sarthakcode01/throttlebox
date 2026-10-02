@@ -1,0 +1,87 @@
+import type { LoginRequest, MeResponse, RegisterRequest } from '@throttlebox/shared';
+
+/**
+ * Browser fetch wrapper for the Fastify API.
+ *
+ * Two things matter here:
+ *  1. `credentials: 'include'` so the httpOnly session cookie is sent.
+ *  2. CSRF double-submit — echo the readable CSRF cookie on mutations.
+ */
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+async function request<T>(
+  path: string,
+  options: RequestInit & { method?: string } = {},
+): Promise<T> {
+  const method = options.method ?? 'GET';
+  const isMutation = method !== 'GET' && method !== 'HEAD';
+
+  const headers = new Headers(options.headers);
+  if (options.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (isMutation) {
+    const csrf = readCookie('throttlebox_csrf');
+    if (csrf) headers.set('X-CSRF-Token', csrf);
+  }
+
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    method,
+    headers,
+    credentials: 'include',
+  });
+
+  if (response.status === 204) return undefined as T;
+
+  const text = await response.text();
+  const payload = text ? (JSON.parse(text) as unknown) : {};
+
+  if (!response.ok) {
+    const body = payload as { error?: string; message?: string };
+    throw new ApiError(
+      response.status,
+      body.error ?? 'unknown_error',
+      body.message ?? `Request failed with status ${response.status}`,
+    );
+  }
+
+  return payload as T;
+}
+
+export const api = {
+  health: () => request<{ ok: boolean }>('/health'),
+
+  register: (body: RegisterRequest) =>
+    request<{ user: { id: string; email: string; name: string } }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  login: (body: LoginRequest) =>
+    request<{ user: { id: string; email: string; name: string } }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+
+  me: () => request<MeResponse>('/api/me'),
+};

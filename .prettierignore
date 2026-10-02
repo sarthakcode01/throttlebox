@@ -1,0 +1,7 @@
+dist
+.next
+out
+coverage
+node_modules
+pnpm-lock.yaml
+apps/server/drizzle
