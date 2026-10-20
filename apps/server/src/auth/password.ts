@@ -2,7 +2,10 @@ import { hash, verify } from '@node-rs/argon2';
 
 /**
  * Argon2id parameters. Tuned for interactive logins on modest hardware.
- * The same primitives are reused for API key hashing in Phase 2.
+ *
+ * These are for passwords only. API keys use HMAC-SHA-256 with a server-side
+ * pepper instead — a key is a high-entropy random secret, so a slow KDF buys
+ * no security and costs latency on every request. See `keys/generate.ts`.
  */
 const ARGON2_OPTIONS = {
   memoryCost: 19_456, // 19 MiB
