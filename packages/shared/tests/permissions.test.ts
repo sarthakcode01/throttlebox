@@ -14,9 +14,14 @@ describe('roleHasPermission', () => {
     expect(roleHasPermission('admin', 'members:invite')).toBe(true);
   });
 
-  it('restricts dev to specific key actions', () => {
+  it('restricts dev to key actions only', () => {
     expect(roleHasPermission('dev', 'keys:create')).toBe(true);
-    expect(roleHasPermission('dev', 'keys:read')).toBe(false);
+    expect(roleHasPermission('dev', 'keys:read')).toBe(true);
+    expect(roleHasPermission('dev', 'keys:rotate')).toBe(true);
+    expect(roleHasPermission('dev', 'keys:revoke')).toBe(true);
+
+    // A dev manages keys and mocks, but does not administer the workspace.
+    expect(roleHasPermission('dev', 'members:invite')).toBe(false);
   });
 
   it('gives viewers read-only access', () => {

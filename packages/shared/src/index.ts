@@ -1,7 +1,9 @@
 /**
  * Shared types and constants used by both the API server and the web app.
- * This package is consumed as TypeScript source (no build step) so that
- * types stay in sync across the monorepo.
+ *
+ * This package is compiled to `dist/` (see `tsconfig.build.json`) and consumed
+ * as an ordinary workspace dependency, so the server's production build can
+ * emit plain JavaScript that Node can run.
  */
 
 // ---------------------------------------------------------------------------
@@ -18,7 +20,7 @@ export type Role = (typeof ROLES)[number];
 export const PERMISSIONS: Record<Role, readonly string[]> = {
   owner: ['*'],
   admin: ['keys:*', 'members:invite', 'plugins:deploy', 'mock:*', 'chaos:*'],
-  dev: ['keys:create', 'keys:rotate', 'mock:*', 'chaos:*'],
+  dev: ['keys:create', 'keys:read', 'keys:rotate', 'keys:revoke', 'mock:*', 'chaos:*'],
   viewer: ['keys:read'],
 };
 
@@ -88,7 +90,7 @@ export interface AuthErrorResponse {
 }
 
 // ---------------------------------------------------------------------------
-// API keys (Phase 2 — types only for now)
+// API keys (Phase 2)
 // ---------------------------------------------------------------------------
 
 export const KEY_ENVS = ['test', 'live'] as const;
@@ -96,3 +98,62 @@ export type KeyEnv = (typeof KEY_ENVS)[number];
 
 export const KEY_STATUSES = ['active', 'revoked'] as const;
 export type KeyStatus = (typeof KEY_STATUSES)[number];
+
+/**
+ * Scopes a key can carry. A key with an empty scope list is treated as
+ * `mock:read` only — never "empty means everything".
+ */
+export const KEY_SCOPES = ['mock:read', 'mock:write', 'chaos:write', 'keys:read'] as const;
+export type KeyScope = (typeof KEY_SCOPES)[number];
+
+/** The scope a key gets when the caller asks for none. */
+export const DEFAULT_KEY_SCOPE: KeyScope = 'mock:read';
+
+/** A key is masked like this in every list response. */
+export interface ApiKeySummary {
+  id: string;
+  familyId: string;
+  name: string;
+  /** e.g. `sk_live_9Kd2mQxR7tYb…eU` — never the full secret. */
+  display: string;
+  env: KeyEnv;
+  status: KeyStatus;
+  scopes: KeyScope[];
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  graceUntil: string | null;
+  createdAt: string;
+}
+
+/**
+ * The only response that ever contains the raw key. It is returned exactly
+ * once, at creation or rotation, and is not retrievable afterwards.
+ */
+export interface ApiKeyCreatedResponse {
+  id: string;
+  familyId: string;
+  /** The raw key. Shown once. */
+  key: string;
+  prefix: string;
+  last4: string;
+  env: KeyEnv;
+  scopes: KeyScope[];
+  expiresAt: string | null;
+  warning: string;
+}
+
+export interface CreateKeyRequest {
+  name: string;
+  env: KeyEnv;
+  scopes?: KeyScope[];
+  expiresInDays?: number | null;
+}
+
+export interface RotateKeyRequest {
+  /** Grace window during which the old key still works. Defaults to 24h. */
+  graceHours?: number;
+}
+
+export interface ApiKeyListResponse {
+  keys: ApiKeySummary[];
+}

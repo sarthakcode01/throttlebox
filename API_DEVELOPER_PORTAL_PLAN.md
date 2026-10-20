@@ -12,14 +12,14 @@ A SaaS dashboard that provides mock data APIs (e.g., fake e-commerce backend, we
 
 ### Core (Must Build)
 
-| Feature                                       | Difficulty | Portfolio Signal |
-| --------------------------------------------- | :--------: | :--------------: |
-| Key Generation & Management                   |    ⭐⭐    |     ⭐⭐⭐⭐     |
-| Rate Limiting (sliding window, Redis)         |  ⭐⭐⭐⭐  |    ⭐⭐⭐⭐⭐    |
-| API Key Security (Argon2, prefixes, rotation) |   ⭐⭐⭐   |    ⭐⭐⭐⭐⭐    |
-| Analytics + TimescaleDB (p50/p95/p99)         |  ⭐⭐⭐⭐  |     ⭐⭐⭐⭐     |
-| Subscription Tiers (middleware pipeline)      |   ⭐⭐⭐   |      ⭐⭐⭐      |
-| Team Workspaces & RBAC (basic)                |   ⭐⭐⭐   |      ⭐⭐⭐      |
+| Feature                                              | Difficulty | Portfolio Signal |
+| ---------------------------------------------------- | :--------: | :--------------: |
+| Key Generation & Management                          |    ⭐⭐    |     ⭐⭐⭐⭐     |
+| Rate Limiting (sliding window, Redis)                |  ⭐⭐⭐⭐  |    ⭐⭐⭐⭐⭐    |
+| API Key Security (HMAC + pepper, prefixes, rotation) |   ⭐⭐⭐   |    ⭐⭐⭐⭐⭐    |
+| Analytics + TimescaleDB (p50/p95/p99)                |  ⭐⭐⭐⭐  |     ⭐⭐⭐⭐     |
+| Subscription Tiers (middleware pipeline)             |   ⭐⭐⭐   |      ⭐⭐⭐      |
+| Team Workspaces & RBAC (basic)                       |   ⭐⭐⭐   |      ⭐⭐⭐      |
 
 ### Differentiators (Pick 2)
 
@@ -112,7 +112,7 @@ services:
 
 **Step 1.1 — Password auth + sessions**
 
-- Argon2id password hashing (same primitive as API keys — reuse the module)
+- Argon2id password hashing (the right primitive for a low-entropy secret — API keys use a different one, see Step 2.2)
 - `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`
 - Session = random 256-bit token stored hashed in Redis with a sliding TTL, delivered as an httpOnly, Secure, SameSite=Lax cookie
 - CSRF: `SameSite=Lax` + an `X-CSRF-Token` double-submit token on all mutations
@@ -163,29 +163,41 @@ const PERMISSIONS = {
 api_keys (
   id uuid pk,
   org_id fk,
-  name text,                 -- "staging-backend"
-  prefix text,               -- 'sk_test_ab12' (first 12 chars, stored)
-  hash text,                 -- Argon2id of full key
+  family_id fk,               -- rotation group; revoking it kills the chain
+  name text,                  -- "staging-backend"
+  public_id text unique,      -- 12 base62 chars, the indexed lookup handle
+  prefix text,                -- 'sk_test_9Kd2mQxR7tYb' (display only)
+  secret_hash text,           -- HMAC-SHA-256(pepper, publicId:secret)
   last4 text,
-  scopes jsonb,              -- ['mock:read', 'mock:write']
-  env text default 'test',   -- test | live
+  scopes text[],              -- ['mock:read', 'mock:write']
+  env text default 'test',    -- test | live
   status text default 'active', -- active | revoked
   expires_at timestamptz null,
+  grace_until timestamptz null, -- set during rotation
   created_at, revoked_at, last_used_at
 )
 ```
+
+> **Superseded.** This step originally specified Argon2id over the whole key.
+> The implemented design uses `HMAC-SHA-256(pepper, publicId:secret)` with a
+> separate indexed `public_id` column — see `API_KEY_MANAGEMENT_PLAN.md` for
+> the reasoning. The short version: a 192-bit random secret has nothing to
+> brute force, so a slow KDF buys no security and costs 50–100ms on every
+> request.
 
 **Step 2.2 — Key generation (server-side only)**
 
 ```typescript
 function generateKey(env: 'test' | 'live') {
-  const secret = base62(crypto.randomBytes(24)); // ~32 chars
-  const key = `sk_${env}_${secret}`;
+  const publicId = base62(crypto.randomBytes(12)); // 12 chars, indexed lookup handle
+  const secret = base62(crypto.randomBytes(24)); // 32 chars, ~192 bits
+  const key = `sk_${env}_${publicId}_${secret}`;
   return {
     key, // shown ONCE
-    prefix: key.slice(0, 12),
-    hash: await argon2id(key),
-    last4: key.slice(-4),
+    publicId,
+    prefix: `sk_${env}_${publicId}`,
+    secretHash: hmacSha256(PEPPER, `${publicId}:${secret}`),
+    last4: secret.slice(-4),
   };
 }
 ```
@@ -194,9 +206,10 @@ function generateKey(env: 'test' | 'live') {
 
 **Step 2.3 — Key lookup path (the hot path)**
 
-- Cache `prefix → key row` in Redis with 60s TTL
-- On request: `Authorization: Bearer sk_...` → split prefix → cache/DB lookup → Argon2 verify → attach `key_id`, `org_id` to request
-- Update `last_used_at` asynchronously (queue, not inline)
+- Look up by `public_id` on its unique index — one indexed query, no scan
+- On request: `Authorization: Bearer sk_...` → parse → indexed lookup → `timingSafeEqual` verify → attach `key_id`, `org_id` to request
+- A miss runs a dummy HMAC so the timing profile stays flat
+- Update `last_used_at` asynchronously (write-behind buffer, not inline)
 
 **Step 2.4 — Rotation & revocation**
 
@@ -498,7 +511,7 @@ playground_requests (id, session_id, method, url, headers jsonb,
 **Step 10.2 — ADRs (`/docs/adr/`)**
 
 - `001-sliding-window-vs-token-bucket.md`
-- `002-argon2id-for-api-keys.md`
+- `002-hmac-pepper-vs-argon2id-for-api-keys.md`
 - `003-async-log-ingestion.md`
 - `004-timescale-aggregates.md`
   Each: context → options → decision → tradeoffs.

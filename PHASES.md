@@ -48,14 +48,16 @@ flowchart LR
 | **Risk**          | Medium (was Low) — session security is the real work now; skip email verification/reset to stay in budget                                                                                                                   |
 | **Parallel**      | Frontend layout/shell can be built while backend schema lands                                                                                                                                                               |
 
-### Phase 2 — API Key Management · Days 6–9
+### Phase 2 — API Key Management · Days 6–9 ✅
 
-|                   |                                                                                                                                                                                                                                 |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Deliverables**  | `api_keys` table, `sk_{env}_{secret}` generation, Argon2id hashing, prefix + last4, Redis-cached lookup path (60s TTL), async `last_used_at`, rotation with 24h overlap, revocation + cache purge, Keys UI with one-time reveal |
-| **Deps**          | Phase 1                                                                                                                                                                                                                         |
-| **Exit criteria** | curl a protected endpoint with the key → revoke → 401; rotation overlap works                                                                                                                                                   |
-| **Risk**          | Medium — the lookup path is the hottest code in the project; get the cache invalidation right                                                                                                                                   |
+|                   |                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Deliverables**  | `api_keys` / `api_key_families` / `api_key_events` schema, `sk_{env}_{publicId}_{secret}` generation, HMAC-SHA-256 pepper hashing, prefix + last4, indexed `public_id` lookup path, async `last_used_at` write-behind buffer, rotation with 24h grace, family revocation (kill switch), scopes, idempotency on create, Keys UI with one-time reveal |
+| **Deps**          | Phase 1                                                                                                                                                                                                                                                                                                                                             |
+| **Exit criteria** | curl a protected endpoint with the key → revoke → 401; rotation overlap works                                                                                                                                                                                                                                                                       |
+| **Risk**          | Medium — the lookup path is the hottest code in the project; get the cache invalidation right                                                                                                                                                                                                                                                       |
+| **Notes**         | One deliberate divergence from the original plan: keys use HMAC-SHA-256 with a server-side pepper rather than Argon2id. A slow KDF is wrong for a 192-bit secret — there is nothing to brute force — and it would have added 50–100ms to every request, blowing the p95 budget in Phase 4. See `API_KEY_MANAGEMENT_PLAN.md`.                        |
+| **Done**          | 2026-10-20 — 77 tests (unit + Postgres integration + HTTP routes), including all 9 documented failure modes                                                                                                                                                                                                                                         |
 
 ### Phase 3 — Mock API Engine · Days 10–14
 
@@ -134,9 +136,9 @@ flowchart LR
 
 ## Dependency-Ordered Checklist
 
-- [ ] P0 Foundation
-- [ ] P1 Auth & Orgs
-- [ ] P2 API Keys
+- [x] P0 Foundation
+- [x] P1 Auth & Orgs
+- [x] P2 API Keys
 - [ ] P3 Mock Engine
 - [ ] P4 Rate Limiting ⭐
 - [ ] P5 Analytics ⭐

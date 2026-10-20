@@ -1,4 +1,13 @@
-import type { LoginRequest, MeResponse, RegisterRequest } from '@throttlebox/shared';
+import type {
+  ApiKeyCreatedResponse,
+  ApiKeyListResponse,
+  ApiKeySummary,
+  CreateKeyRequest,
+  LoginRequest,
+  MeResponse,
+  RegisterRequest,
+  RotateKeyRequest,
+} from '@throttlebox/shared';
 
 /**
  * Browser fetch wrapper for the Fastify API.
@@ -84,4 +93,29 @@ export const api = {
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
 
   me: () => request<MeResponse>('/api/me'),
+
+  // ---- API keys --------------------------------------------------------
+
+  listKeys: () => request<ApiKeyListResponse>('/api/keys'),
+
+  getKey: (id: string) => request<ApiKeySummary>(`/api/keys/${id}`),
+
+  /** Returns the raw key. This is the only time it is ever visible. */
+  createKey: (body: CreateKeyRequest) =>
+    request<ApiKeyCreatedResponse>('/api/keys', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /** Returns a new raw key. The old one keeps working during the grace window. */
+  rotateKey: (id: string, body: RotateKeyRequest = {}) =>
+    request<ApiKeyCreatedResponse>(`/api/keys/${id}/rotate`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  revokeKey: (id: string) => request<void>(`/api/keys/${id}/revoke`, { method: 'POST' }),
+
+  /** Kill switch — revokes every key in the rotation chain. */
+  revokeFamily: (id: string) => request<void>(`/api/families/${id}/revoke`, { method: 'POST' }),
 };

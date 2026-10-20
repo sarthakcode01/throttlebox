@@ -62,9 +62,14 @@ export default function DashboardPage() {
             Signed in as {user.email}
           </p>
         </div>
-        <button className="secondary" onClick={() => logout.mutate()} disabled={logout.isPending}>
-          Sign out
-        </button>
+        <div className="row">
+          <a href="/dashboard/keys">
+            <button className="secondary">API keys</button>
+          </a>
+          <button className="secondary" onClick={() => logout.mutate()} disabled={logout.isPending}>
+            Sign out
+          </button>
+        </div>
       </div>
 
       <div className="card stack">
@@ -85,8 +90,8 @@ export default function DashboardPage() {
       <h2>Coming next</h2>
       <div className="card stack">
         <p className="muted" style={{ margin: 0 }}>
-          API key management, the mock engine, rate limiting, and analytics land in the phases that
-          follow.
+          The mock engine, rate limiting, and analytics land in the phases that follow. API keys are
+          ready now — create one from the <a href="/dashboard/keys">API keys</a> page.
         </p>
       </div>
     </main>

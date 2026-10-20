@@ -3,7 +3,11 @@ import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import { config, isProduction } from './config.js';
 import { authPlugin } from './auth/middleware.js';
+import { keyAuthPlugin } from './keys/middleware.js';
+import { startTouchFlusher, stopTouchFlusher } from './keys/touch.js';
+import { registerLenientContentType } from './http/contentType.js';
 import { authRoutes } from './routes/auth.js';
+import { keyRoutes } from './routes/keys.js';
 
 export async function buildServer(): Promise<FastifyInstance> {
   const fastify = Fastify({
@@ -21,6 +25,9 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await fastify.register(cookie);
   await fastify.register(authPlugin);
+  await fastify.register(keyAuthPlugin);
+
+  registerLenientContentType(fastify);
 
   // ---- Health ---------------------------------------------------------
   fastify.get('/health', async () => ({
@@ -31,12 +38,27 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   // ---- Routes ---------------------------------------------------------
   await fastify.register(authRoutes, { prefix: '/api' });
+  await fastify.register(keyRoutes, { prefix: '/api' });
 
   return fastify;
 }
 
 async function main() {
   const fastify = await buildServer();
+  startTouchFlusher();
+
+  // Flush buffered `last_used_at` writes on shutdown so a deploy does not
+  // lose them.
+  const shutdown = async (signal: string) => {
+    fastify.log.info({ signal }, 'shutting down');
+    await stopTouchFlusher();
+    await fastify.close();
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+
   try {
     await fastify.listen({ port: config.PORT, host: '0.0.0.0' });
   } catch (err) {

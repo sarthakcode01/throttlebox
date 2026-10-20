@@ -18,7 +18,7 @@ export default function HomePage() {
       <h2>What&apos;s inside</h2>
       <div className="card stack">
         <p className="muted" style={{ margin: 0 }}>
-          <strong>API keys</strong> — generated once, stored as Argon2id hashes, revocable and
+          <strong>API keys</strong> — generated once, stored as peppered HMAC hashes, revocable and
           rotatable without downtime.
         </p>
         <p className="muted" style={{ margin: 0 }}>
