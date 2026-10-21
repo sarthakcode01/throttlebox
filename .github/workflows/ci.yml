@@ -13,26 +13,65 @@ concurrency:
 jobs:
   quality:
     name: Typecheck, lint, format, test
-    runs-on: ubuntu-latest
+    # Pinned rather than `ubuntu-latest`, which is migrating to Ubuntu 26.
+    # A silent OS change should never be able to break the build.
+    runs-on: ubuntu-24.04
+
+    # The integration tests run against a real Postgres and a real Redis —
+    # no mocked database, no mocked limiter.
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: throttlebox
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d throttlebox"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/throttlebox
+      REDIS_URL: redis://localhost:6379
+      # CI-only values. Real deployments inject their own.
+      SESSION_SECRET: ci-only-session-secret-not-for-production
+      KEY_PEPPER: ci-only-key-pepper-not-for-production
+      COOKIE_DOMAIN: localhost
+      PORT: 3001
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      # Reads the `packageManager` field from package.json, so the pnpm
+      # version can never drift from the one the repo was developed against.
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          # pnpm 11 requires Node >= 22.13 (it uses `node:sqlite`). Node 24
+          # is the current LTS and matches the local toolchain.
+          node-version: 24
           cache: pnpm
-
-      # Redis is needed because the session store connects on import.
-      - name: Start Redis
-        run: |
-          docker compose up -d redis
-          sleep 2
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations
+        run: pnpm db:migrate
 
       - name: Format check
         run: pnpm format:check
@@ -42,6 +81,9 @@ jobs:
 
       - name: Lint
         run: pnpm lint
+
+      - name: Build
+        run: pnpm build
 
       - name: Test
         run: pnpm test
