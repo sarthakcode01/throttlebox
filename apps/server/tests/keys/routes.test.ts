@@ -3,8 +3,7 @@ import request from 'supertest';
 import type { FastifyInstance } from 'fastify';
 import type { Server } from 'node:http';
 import { buildServer } from '../../src/index.js';
-import { createTestOrg, destroyTestOrg, type TestOrg } from './helpers.js';
-
+import { destroyTestOrg, type TestOrg } from './helpers.js';
 /**
  * HTTP-level tests for the key routes.
  *
@@ -14,19 +13,25 @@ import { createTestOrg, destroyTestOrg, type TestOrg } from './helpers.js';
 
 let app: FastifyInstance;
 let server: Server;
-let org: TestOrg;
+
+/**
+ * Every account registered through the API, so the suite can clean up after
+ * itself instead of leaving users and orgs behind in the database.
+ */
+const createdOrgs: TestOrg[] = [];
 
 beforeAll(async () => {
   app = await buildServer();
   await app.ready();
   // Supertest drives a Node http.Server; Fastify exposes one on `.server`.
   server = app.server;
-  org = await createTestOrg('routes');
 });
 
 afterAll(async () => {
   await app.close();
-  await destroyTestOrg(org);
+  for (const org of createdOrgs) {
+    await destroyTestOrg(org);
+  }
 });
 
 /** Register a fresh account and return an agent holding its session cookie. */
@@ -39,6 +44,13 @@ async function signedInAgent(label: string) {
     .send({ email, password: 'a-long-enough-password', name: 'Route Tester' });
 
   expect(response.status).toBe(201);
+
+  // Register creates the user, a personal org, and an owner membership.
+  createdOrgs.push({
+    userId: response.body.user.id,
+    orgId: response.body.org.id,
+  });
+
   return agent;
 }
 

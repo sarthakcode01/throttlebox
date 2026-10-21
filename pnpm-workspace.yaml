@@ -5,5 +5,9 @@ packages:
 # esbuild (via tsx/vite/vitest) needs its postinstall to place a platform binary.
 onlyBuiltDependencies:
   - esbuild
+
+# pnpm 11 blocks dependency build scripts by default and fails the install with
+# ERR_PNPM_IGNORED_BUILDS unless each package is explicitly allowed. The value
+# must be a boolean.
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: true
