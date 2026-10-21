@@ -52,6 +52,15 @@ the browser to send the cookies, but it cannot read the token, so it cannot
 produce a matching header. Requests that carry an `Authorization` header are
 exempt — those are authenticated by a token a browser never attaches on its own.
 
+Login and registration are **rate limited** per IP (20 attempts / 15 minutes by
+default) so the Argon2id verification cannot be used for credential stuffing.
+Expired session rows are swept by a background janitor — Redis is only a cache,
+so Postgres is the durable copy and would otherwise grow without bound.
+
+`X-Forwarded-For` is **ignored** unless `TRUST_PROXY_HOPS` is set, because the
+API key audit trail records the client address and a spoofed header would let
+anyone write false evidence into it.
+
 ```bash
 # Register (creates a user + a personal org + a session)
 curl -i -X POST http://localhost:3001/api/auth/register \
@@ -118,6 +127,13 @@ be replayed, because it was only ever shown once.
 | `pnpm check`      | Format + typecheck + lint + test |
 | `pnpm db:migrate` | Apply migrations                 |
 | `pnpm db:studio`  | Browse the database              |
+
+### Health probes
+
+| Endpoint        | Meaning                                                                                                                                      |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/health`       | Liveness. The process is up. Does not touch the database or Redis, so a dependency blip cannot make an orchestrator kill a healthy instance. |
+| `/health/ready` | Readiness. Checks that Postgres and Redis are reachable. Returns 503 when either is down, so traffic is routed away.                         |
 
 ## Architecture notes
 

@@ -31,6 +31,23 @@ const schema = z.object({
 
   COOKIE_DOMAIN: z.string().default('localhost'),
 
+  /**
+   * Brute-force protection for the credential endpoints. Attempts are counted
+   * per IP inside the window.
+   */
+  AUTH_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1000).default(20),
+  AUTH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).max(3600).default(900),
+
+  /**
+   * How many reverse proxies sit in front of the app.
+   *
+   * `0` means the app is reached directly, so `X-Forwarded-For` is ignored
+   * entirely — otherwise any client could spoof its own IP, and the IP is
+   * what the API key audit trail records. Set it to the number of trusted
+   * proxies (typically `1` behind Fly.io, Heroku, or a load balancer).
+   */
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+
   /** Session lifetime in seconds. Default 7 days. */
   SESSION_TTL_SECONDS: z.coerce
     .number()

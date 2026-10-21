@@ -1,11 +1,12 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/client.js';
 import { orgMembers, orgs, users } from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { createSession, destroySession, CSRF_COOKIE, SESSION_COOKIE } from '../auth/session.js';
-import { config, isProduction } from '../config.js';
+import { createRateLimit } from '../http/rateLimit.js';
+import { config, isProduction, isTest } from '../config.js';
 
 const registerSchema = z.object({
   email: z.string().email().max(320),
@@ -48,76 +49,105 @@ const csrfCookieOptions = {
 const DUMMY_HASH =
   '$argon2id$v=19$m=19456,t=2,p=1$Y2FuYXJ5c2FsdGJhc2U$8Q1Yn0F8B7lKl2Fh2vGzUu0VbY0n1q3Pz8rXk4mY6sJg';
 
+/**
+ * Brute-force protection for the credential endpoints.
+ *
+ * Login is the one place where an unauthenticated caller gets to make the
+ * server do expensive work (an Argon2id verification), so it needs a ceiling
+ * on how often that can happen. Registration is limited too, because
+ * otherwise the endpoint is a free way to fill the database and burn CPU on
+ * password hashing.
+ *
+ * The limit is disabled under NODE_ENV=test so the suite is not throttled by
+ * its own fixtures; the limiter itself is covered by a dedicated test.
+ */
+const authRateLimiter = createRateLimit({
+  max: config.AUTH_RATE_LIMIT_MAX,
+  windowMs: config.AUTH_RATE_LIMIT_WINDOW_SECONDS * 1000,
+  keyGenerator: (request) => `auth:${request.ip}`,
+  enabled: !isTest,
+  message: 'Too many attempts. Please wait and try again.',
+});
+
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ---- Register -------------------------------------------------------
-  fastify.post('/auth/register', async (request, reply) => {
-    const parsed = registerSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: 'validation_error',
-        message: parsed.error.issues[0]?.message ?? 'Invalid input',
+  fastify.post(
+    '/auth/register',
+    { preHandler: authRateLimiter.handler },
+    async (request, reply) => {
+      const parsed = registerSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: 'validation_error',
+          message: parsed.error.issues[0]?.message ?? 'Invalid input',
+        });
+      }
+      const { email, password, name } = parsed.data;
+
+      // Reject duplicate emails case-insensitively.
+      //
+      // The comparison uses `lower(email)` so it can use the `users_email_lower`
+      // unique index. A plain `email = $1` cannot use that index — the planner
+      // has no way to know the column is already lowercased — and falls back to
+      // a sequential scan of the whole table on every registration.
+      const existing = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(sql`lower(${users.email}) = ${email.toLowerCase()}`)
+        .limit(1);
+      if (existing.length > 0) {
+        return reply
+          .code(409)
+          .send({ error: 'email_taken', message: 'That email is already registered' });
+      }
+
+      const passwordHash = await hashPassword(password);
+
+      const { user, org } = await db.transaction(async (tx) => {
+        const [created] = await tx
+          .insert(users)
+          .values({ email: email.toLowerCase(), passwordHash, name })
+          .returning({ id: users.id, email: users.email, name: users.name });
+
+        if (!created) throw new Error('Failed to create user');
+
+        // Every new user gets a personal org, so there is always an org context.
+        const orgName = `${name.split(' ')[0] ?? name}'s Workspace`;
+        const [createdOrg] = await tx
+          .insert(orgs)
+          .values({ name: orgName, ownerId: created.id })
+          .returning({ id: orgs.id, name: orgs.name, plan: orgs.plan });
+
+        if (!createdOrg) throw new Error('Failed to create org');
+
+        await tx.insert(orgMembers).values({
+          orgId: createdOrg.id,
+          userId: created.id,
+          role: 'owner',
+        });
+
+        return { user: created, org: createdOrg };
       });
-    }
-    const { email, password, name } = parsed.data;
 
-    // Reject duplicate emails case-insensitively.
-    const existing = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.email, email.toLowerCase()))
-      .limit(1);
-    if (existing.length > 0) {
-      return reply
-        .code(409)
-        .send({ error: 'email_taken', message: 'That email is already registered' });
-    }
-
-    const passwordHash = await hashPassword(password);
-
-    const { user, org } = await db.transaction(async (tx) => {
-      const [created] = await tx
-        .insert(users)
-        .values({ email: email.toLowerCase(), passwordHash, name })
-        .returning({ id: users.id, email: users.email, name: users.name });
-
-      if (!created) throw new Error('Failed to create user');
-
-      // Every new user gets a personal org, so there is always an org context.
-      const orgName = `${name.split(' ')[0] ?? name}'s Workspace`;
-      const [createdOrg] = await tx
-        .insert(orgs)
-        .values({ name: orgName, ownerId: created.id })
-        .returning({ id: orgs.id, name: orgs.name, plan: orgs.plan });
-
-      if (!createdOrg) throw new Error('Failed to create org');
-
-      await tx.insert(orgMembers).values({
-        orgId: createdOrg.id,
-        userId: created.id,
-        role: 'owner',
+      const session = await createSession({
+        userId: user.id,
+        ip: request.ip,
+        userAgent: request.headers['user-agent'],
       });
 
-      return { user: created, org: createdOrg };
-    });
+      reply
+        .setCookie(SESSION_COOKIE, session.token, {
+          ...cookieOptions,
+          expires: session.expiresAt,
+        })
+        .setCookie(CSRF_COOKIE, session.csrfToken, csrfCookieOptions);
 
-    const session = await createSession({
-      userId: user.id,
-      ip: request.ip,
-      userAgent: request.headers['user-agent'],
-    });
-
-    reply
-      .setCookie(SESSION_COOKIE, session.token, {
-        ...cookieOptions,
-        expires: session.expiresAt,
-      })
-      .setCookie(CSRF_COOKIE, session.csrfToken, csrfCookieOptions);
-
-    return reply.code(201).send({ user, org });
-  });
+      return reply.code(201).send({ user, org });
+    },
+  );
 
   // ---- Login ----------------------------------------------------------
-  fastify.post('/auth/login', async (request, reply) => {
+  fastify.post('/auth/login', { preHandler: authRateLimiter.handler }, async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply
@@ -129,7 +159,9 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     const [user] = await db
       .select()
       .from(users)
-      .where(eq(users.email, email.toLowerCase()))
+      // `lower(email)` so the `users_email_lower` index is used — a plain
+      // `email = $1` forces a sequential scan.
+      .where(sql`lower(${users.email}) = ${email.toLowerCase()}`)
       .limit(1);
 
     // Always run a verify to avoid leaking whether the email exists via timing.
@@ -143,6 +175,13 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
+
+    // Signing in while already signed in would leave the previous session
+    // alive and usable. Destroy it so one login means one live session.
+    const previousToken = request.cookies[SESSION_COOKIE];
+    if (previousToken) {
+      await destroySession(previousToken);
+    }
 
     const session = await createSession({
       userId: user.id,

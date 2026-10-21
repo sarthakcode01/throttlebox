@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { KeyEnv, KeyScope } from '@throttlebox/shared';
 import { db } from '../db/client.js';
 import { apiKeyFamilies, apiKeys } from '../db/schema.js';
@@ -137,18 +137,4 @@ async function fail(
     event,
     metadata: { reason },
   });
-}
-
-/**
- * Look up a key by id without verifying a secret. Used by the dashboard to
- * show key details, never for authentication.
- */
-export async function findKeyByPublicId(publicId: string) {
-  const [row] = await db
-    .select()
-    .from(apiKeys)
-    .where(and(eq(apiKeys.publicId, publicId)))
-    .limit(1);
-
-  return row ?? null;
 }

@@ -16,12 +16,3 @@ export function redact(text: string): string {
   if (!text) return text;
   return text.replace(new RegExp(RAW_KEY_PATTERN.source, 'g'), 'sk_***');
 }
-
-/**
- * Redact a value that may be a key or may contain one. Used for headers and
- * structured log fields where the type is not known up front.
- */
-export function redactValue(value: unknown): unknown {
-  if (typeof value === 'string') return redact(value);
-  return value;
-}

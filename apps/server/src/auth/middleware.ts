@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Role } from '@throttlebox/shared';
 import { roleHasPermission } from '@throttlebox/shared';
 import { db } from '../db/client.js';
@@ -124,13 +124,3 @@ export const authPlugin = fp(async (fastify) => {
     }
   });
 });
-
-/** Helper: fetch the membership for a specific org, for org-scoped routes. */
-export async function membershipForOrg(userId: string, orgId: string) {
-  const [row] = await db
-    .select({ role: orgMembers.role })
-    .from(orgMembers)
-    .where(and(eq(orgMembers.userId, userId), eq(orgMembers.orgId, orgId)))
-    .limit(1);
-  return row ?? null;
-}
