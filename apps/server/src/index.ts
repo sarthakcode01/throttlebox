@@ -11,6 +11,9 @@ import { registerSecurityHeaders } from './http/securityHeaders.js';
 import { startSessionJanitor, stopSessionJanitor } from './auth/janitor.js';
 import { authRoutes } from './routes/auth.js';
 import { keyRoutes } from './routes/keys.js';
+import { mockRoutes, mockPreviewRoutes } from './routes/mock.js';
+import { openApiRoutes } from './routes/openapi.js';
+import { serviceRoutes } from './routes/services.js';
 
 export async function buildServer(): Promise<FastifyInstance> {
   // Trust `X-Forwarded-For` only when a proxy count is configured. With
@@ -48,6 +51,13 @@ export async function buildServer(): Promise<FastifyInstance> {
   // ---- Routes ---------------------------------------------------------
   await fastify.register(authRoutes, { prefix: '/api' });
   await fastify.register(keyRoutes, { prefix: '/api' });
+  await fastify.register(serviceRoutes, { prefix: '/api' });
+  await fastify.register(mockPreviewRoutes, { prefix: '/api' });
+
+  // The public mock API and its OpenAPI document live outside /api — they
+  // are what a developer's own code calls, with a bearer token.
+  await fastify.register(mockRoutes);
+  await fastify.register(openApiRoutes);
 
   return fastify;
 }

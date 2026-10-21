@@ -66,6 +66,12 @@ export default function DashboardPage() {
           <a href="/dashboard/keys">
             <button className="secondary">API keys</button>
           </a>
+          <a href="/dashboard/services">
+            <button className="secondary">Mock APIs</button>
+          </a>
+          <a href="/docs">
+            <button className="secondary">API reference</button>
+          </a>
           <button className="secondary" onClick={() => logout.mutate()} disabled={logout.isPending}>
             Sign out
           </button>

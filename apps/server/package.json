@@ -17,6 +17,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@faker-js/faker": "^10.6.0",
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^10.0.1",
     "@node-rs/argon2": "^2.0.2",
@@ -25,6 +26,7 @@
     "drizzle-orm": "^0.38.2",
     "fastify": "^5.2.0",
     "fastify-plugin": "^6.0.0",
+    "find-my-way": "^9.10.0",
     "ioredis": "^5.4.2",
     "postgres": "^3.4.5",
     "zod": "^3.24.1"

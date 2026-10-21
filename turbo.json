@@ -23,12 +23,18 @@
       "dependsOn": ["^build"],
       "outputs": ["coverage/**"]
     },
+    "db:generate": {
+      "cache": false,
+      "dependsOn": ["^build"]
+    },
     "db:migrate": {
-      "cache": false
+      "cache": false,
+      "dependsOn": ["^build"]
     },
     "db:studio": {
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "dependsOn": ["^build"]
     }
   }
 }

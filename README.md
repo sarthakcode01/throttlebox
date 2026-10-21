@@ -8,8 +8,9 @@ with usage visualized on a dashboard.
 
 ## Status
 
-Phases 0–2 are done: the monorepo, local infra, custom authentication, and API
-key management are working. The full plan lives in this repo:
+Phases 0–3 are done: the monorepo, local infra, custom authentication, API key
+management, and the mock API engine are working. The full plan lives in this
+repo:
 
 - [`API_DEVELOPER_PORTAL_PLAN.md`](./API_DEVELOPER_PORTAL_PLAN.md) — scope, stack, and step-by-step build process
 - [`PHASES.md`](./PHASES.md) — phase breakdown, dependencies, and milestones
@@ -69,6 +70,53 @@ curl -i -X POST http://localhost:3001/api/auth/register \
 
 # Inspect your session
 curl http://localhost:3001/api/me -b cookies.txt
+```
+
+### How the mock engine works
+
+A mock service is a backend you define. Its endpoints are rendered from a JSON
+template, so responses can be dynamic without being random:
+
+```json
+{
+  "id": "{{params.id}}",
+  "name": "{{faker.commerce.productName}}",
+  "price": "{{faker.commerce.price}}",
+  "page": "{{query.page \"1\"}}"
+}
+```
+
+| Expression                          | Resolves to                                  |
+| ----------------------------------- | -------------------------------------------- |
+| `{{params.id}}`                     | A path parameter, e.g. `/products/42` → `42` |
+| `{{query.page}}`                    | A query parameter                            |
+| `{{query.page "1"}}`                | A query parameter, with a literal default    |
+| `{{body.name}}`                     | A field of the request body                  |
+| `{{faker.person.fullName}}`         | Realistic generated data                     |
+| `{{faker.number.int min=1 max=10}}` | Generated data with a range                  |
+| `{{now}}`                           | A stable, plausible timestamp                |
+
+**The template engine never evaluates code.** An expression is a dotted path
+plus literal arguments, resolved by walking an object graph. The faker
+namespaces are a closed allowlist, `__proto__` / `constructor` / `prototype`
+are refused at every step, and only own properties are read. A template can
+never take the server down — a failure resolves to `undefined` and the
+response still renders.
+
+**Responses are stable.** The seed is derived from the API key and the request
+path, so `/products/42` always returns the same product, while `/products/99`
+returns something different. Your assertions do not become flaky.
+
+Each new organization starts with a seeded **E-commerce** service, so there is
+something to call within a minute of signing up.
+
+```bash
+# Create a key, then call the mock
+curl -H "Authorization: Bearer sk_test_..." \
+  http://localhost:3001/mock/ecommerce/products/42
+
+# The OpenAPI document for a service
+curl -b cookies.txt http://localhost:3001/docs/ecommerce/openapi.json
 ```
 
 ### How API keys work
@@ -158,19 +206,20 @@ be replayed, because it was only ever shown once.
 | Tests                 | Vitest + Supertest + Playwright                  |
 | Deploy                | Fly.io (API) + Vercel (frontend)                 |
 
-## Planned features
-
-- A mock API engine with templated responses and generated OpenAPI docs
-- Sliding-window rate limiting via Redis Lua
-- Request analytics with p50/p95/p99 latency
-- Chaos engineering controls (latency, errors, dropped connections)
-
 ## Done so far
 
 - **Phase 0** — monorepo, local infra, CI
 - **Phase 1** — custom auth (Argon2id + Redis sessions + CSRF), orgs, RBAC
 - **Phase 2** — API key management: generation, one-time reveal, rotation with
   a grace window, family revocation, scopes, audit trail, and a dashboard
+- **Phase 3** — the mock API engine: services, routes, a declarative template
+  engine, a seeded E-commerce service, an OpenAPI reference, and a dashboard
+
+## Planned features
+
+- Sliding-window rate limiting via Redis Lua
+- Request analytics with p50/p95/p99 latency
+- Chaos engineering controls (latency, errors, dropped connections)
 
 ## License
 

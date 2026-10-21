@@ -21,7 +21,7 @@ export const PERMISSIONS: Record<Role, readonly string[]> = {
   owner: ['*'],
   admin: ['keys:*', 'members:invite', 'plugins:deploy', 'mock:*', 'chaos:*'],
   dev: ['keys:create', 'keys:read', 'keys:rotate', 'keys:revoke', 'mock:*', 'chaos:*'],
-  viewer: ['keys:read'],
+  viewer: ['keys:read', 'mock:read'],
 };
 
 export function roleHasPermission(role: Role, permission: string): boolean {
@@ -156,4 +156,69 @@ export interface RotateKeyRequest {
 
 export interface ApiKeyListResponse {
   keys: ApiKeySummary[];
+}
+
+// ---------------------------------------------------------------------------
+// Mock API engine (Phase 3)
+// ---------------------------------------------------------------------------
+
+export const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
+export type HttpMethod = (typeof HTTP_METHODS)[number];
+
+export interface MockServiceSummary {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  isSeeded: boolean;
+  /** How many active routes the service has. */
+  routeCount: number;
+  createdAt: string;
+}
+
+export interface MockRouteSummary {
+  id: string;
+  serviceId: string;
+  method: HttpMethod;
+  path: string;
+  summary: string;
+  description: string;
+  statusCode: number;
+  responseTemplate: unknown;
+  responseHeaders: Record<string, string>;
+  latencyMs: number;
+  isActive: boolean;
+  position: number;
+}
+
+export interface CreateMockServiceRequest {
+  name: string;
+  slug?: string;
+  description?: string;
+}
+
+export interface CreateMockRouteRequest {
+  method: HttpMethod;
+  path: string;
+  summary?: string;
+  description?: string;
+  statusCode?: number;
+  responseTemplate?: unknown;
+  responseHeaders?: Record<string, string>;
+  latencyMs?: number;
+  isActive?: boolean;
+}
+
+/**
+ * A rendered mock response, returned by the preview endpoint so the dashboard
+ * can show exactly what a caller would receive.
+ */
+export interface MockPreviewResponse {
+  statusCode: number;
+  headers: Record<string, string>;
+  body: unknown;
+  /** Which route matched. */
+  matchedRoute: string | null;
+  /** Milliseconds the artificial latency would add. */
+  latencyMs: number;
 }

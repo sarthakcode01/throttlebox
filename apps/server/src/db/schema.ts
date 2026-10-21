@@ -1,8 +1,10 @@
 import { relations, sql } from 'drizzle-orm';
 import {
   bigserial,
+  boolean,
   index,
   inet,
+  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -12,7 +14,7 @@ import {
   uuid,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
-import { KEY_ENVS, KEY_STATUSES, PLANS, ROLES } from '@throttlebox/shared';
+import { HTTP_METHODS, KEY_ENVS, KEY_STATUSES, PLANS, ROLES } from '@throttlebox/shared';
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -22,6 +24,7 @@ export const roleEnum = pgEnum('role', ROLES);
 export const planEnum = pgEnum('plan', PLANS);
 export const keyEnvEnum = pgEnum('key_env', KEY_ENVS);
 export const keyStatusEnum = pgEnum('key_status', KEY_STATUSES);
+export const httpMethodEnum = pgEnum('http_method', HTTP_METHODS);
 
 // ---------------------------------------------------------------------------
 // Tables
@@ -207,6 +210,96 @@ export const apiKeyEvents = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Mock API engine (Phase 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * A mock API. One service is a coherent backend — "E-commerce", "Weather",
+ * "Payments" — exposed under a single slug.
+ */
+export const mockServices = pgTable(
+  'mock_services',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** URL segment. Unique per org. */
+    slug: text('slug').notNull(),
+    description: text('description').notNull().default(''),
+    /**
+     * Seeded services cannot be deleted, only hidden. Every new org gets the
+     * flagship E-commerce service so there is something to call immediately.
+     */
+    isSeeded: boolean('is_seeded').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('mock_services_org_slug_uniq').on(table.orgId, table.slug),
+    index('mock_services_org_idx').on(table.orgId),
+  ],
+);
+
+/**
+ * One endpoint of a mock API.
+ *
+ * `response_template` is a JSON document that may contain `{{...}}`
+ * expressions — see `mock/template.ts`. It is rendered with a declarative
+ * resolver; there is no `eval` anywhere in the path.
+ */
+export const mockRoutes = pgTable(
+  'mock_routes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    serviceId: uuid('service_id')
+      .notNull()
+      .references(() => mockServices.id, { onDelete: 'cascade' }),
+
+    method: httpMethodEnum('method').notNull(),
+    /** Path template relative to the service, e.g. `/products/:id`. */
+    path: text('path').notNull(),
+
+    summary: text('summary').notNull().default(''),
+    description: text('description').notNull().default(''),
+    statusCode: integer('status_code').notNull().default(200),
+
+    /** The rendered body. JSON, so arrays and objects work. */
+    responseTemplate: jsonb('response_template')
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    /** Extra response headers, e.g. `{"X-Total-Count": "42"}`. */
+    responseHeaders: jsonb('response_headers')
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    /** Artificial latency, in milliseconds. */
+    latencyMs: integer('latency_ms').notNull().default(0),
+
+    /**
+     * Alternative responses with weights, used by the chaos controls in
+     * Phase 6. Reserved here so adding it later is not a migration.
+     */
+    weightedResponses: jsonb('weighted_responses'),
+
+    isActive: boolean('is_active').notNull().default(true),
+    /** Ordering in the generated OpenAPI document. */
+    position: integer('position').notNull().default(0),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('mock_routes_service_idx').on(table.serviceId),
+    uniqueIndex('mock_routes_service_method_path_uniq').on(
+      table.serviceId,
+      table.method,
+      table.path,
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Relations
 // ---------------------------------------------------------------------------
 
@@ -245,6 +338,15 @@ export const apiKeyEventsRelations = relations(apiKeyEvents, ({ one }) => ({
   key: one(apiKeys, { fields: [apiKeyEvents.keyId], references: [apiKeys.id] }),
 }));
 
+export const mockServicesRelations = relations(mockServices, ({ one, many }) => ({
+  org: one(orgs, { fields: [mockServices.orgId], references: [orgs.id] }),
+  routes: many(mockRoutes),
+}));
+
+export const mockRoutesRelations = relations(mockRoutes, ({ one }) => ({
+  service: one(mockServices, { fields: [mockRoutes.serviceId], references: [mockServices.id] }),
+}));
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
@@ -253,3 +355,7 @@ export type OrgMember = typeof orgMembers.$inferSelect;
 export type ApiKey = typeof apiKeys.$inferSelect;
 export type NewApiKey = typeof apiKeys.$inferInsert;
 export type ApiKeyFamily = typeof apiKeyFamilies.$inferSelect;
+export type MockService = typeof mockServices.$inferSelect;
+export type NewMockService = typeof mockServices.$inferInsert;
+export type MockRoute = typeof mockRoutes.$inferSelect;
+export type NewMockRoute = typeof mockRoutes.$inferInsert;

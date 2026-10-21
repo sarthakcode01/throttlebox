@@ -5,6 +5,7 @@ import { db } from '../db/client.js';
 import { orgMembers, orgs, users } from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { createSession, destroySession, CSRF_COOKIE, SESSION_COOKIE } from '../auth/session.js';
+import { seedFlagshipService } from '../mock/seed.js';
 import { createRateLimit } from '../http/rateLimit.js';
 import { config, isProduction, isTest } from '../config.js';
 
@@ -134,6 +135,10 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         ip: request.ip,
         userAgent: request.headers['user-agent'],
       });
+
+      // Every new org starts with the flagship mock service, so there is
+      // something to call as soon as the user has a key.
+      await seedFlagshipService(org.id);
 
       reply
         .setCookie(SESSION_COOKIE, session.token, {

@@ -29,6 +29,12 @@ describe('roleHasPermission', () => {
     expect(roleHasPermission('viewer', 'keys:create')).toBe(false);
   });
 
+  it('lets a viewer read mocks but not change them', () => {
+    expect(roleHasPermission('viewer', 'mock:read')).toBe(true);
+    expect(roleHasPermission('viewer', 'mock:write')).toBe(false);
+    expect(roleHasPermission('viewer', 'mock:delete')).toBe(false);
+  });
+
   it('does not grant owner-only wildcard strings by prefix accident', () => {
     expect(roleHasPermission('dev', 'wildcard')).toBe(false);
   });

@@ -13,6 +13,13 @@
       "when": 1792493233457,
       "tag": "0001_naive_newton_destine",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792585709546,
+      "tag": "0002_jittery_oracle",
+      "breakpoints": true
     }
   ],
   "version": "7",
