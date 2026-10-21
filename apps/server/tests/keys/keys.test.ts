@@ -209,6 +209,34 @@ describe('rotation', () => {
     expect(b.familyId).toBe(created.familyId);
   });
 
+  it('retires the intermediate key when the same key is rotated twice', async () => {
+    const created = await makeKey({ name: 'rotate-twice' });
+
+    const first = await rotateKey({ orgId: org.orgId, keyId: created.id, graceHours: 1 });
+    const second = await rotateKey({ orgId: org.orgId, keyId: created.id, graceHours: 1 });
+
+    // The first successor is now superseded. It must not stay current
+    // forever — a family has at most one current key.
+    const [intermediate] = await db.select().from(apiKeys).where(eq(apiKeys.id, first.id));
+
+    expect(intermediate?.graceUntil).not.toBeNull();
+    expect(intermediate?.status).toBe('active');
+
+    // It still works inside the grace window…
+    expect(await verifyKey(first.key)).not.toBeNull();
+    // …but the newest key is the one that stays current.
+    expect(await verifyKey(second.key)).not.toBeNull();
+
+    // Once the grace window elapses, the intermediate key is dead.
+    await db
+      .update(apiKeys)
+      .set({ graceUntil: new Date(Date.now() - 1000) })
+      .where(eq(apiKeys.id, first.id));
+
+    expect(await verifyKey(first.key)).toBeNull();
+    expect(await verifyKey(second.key)).not.toBeNull();
+  });
+
   it('refuses to narrow the scope set', async () => {
     const created = await makeKey({ name: 'rotate-scopes', scopes: ['mock:read', 'mock:write'] });
 

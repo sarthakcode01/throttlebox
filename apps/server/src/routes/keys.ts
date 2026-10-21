@@ -29,6 +29,25 @@ const paramsSchema = z.object({
 });
 
 /**
+ * Map a store error onto an HTTP status.
+ *
+ * `not_found` is a 404. `already_revoked` and `duplicate_idempotency_key` are
+ * conflicts — the request was well formed but conflicts with the current
+ * state. Everything else is a bad request.
+ */
+function keyErrorStatus(code: KeyStoreError['code']): number {
+  switch (code) {
+    case 'not_found':
+      return 404;
+    case 'already_revoked':
+    case 'duplicate_idempotency_key':
+      return 409;
+    default:
+      return 400;
+  }
+}
+
+/**
  * The raw key is returned by exactly two endpoints — create and rotate — and
  * is never retrievable afterwards. Every other response is masked.
  */
@@ -85,8 +104,10 @@ export const keyRoutes: FastifyPluginAsync = async (fastify) => {
           warning: 'This is the only time the key will be shown.',
         });
       } catch (err) {
-        if (err instanceof KeyStoreError && err.code === 'duplicate_idempotency_key') {
-          return reply.code(409).send({ error: err.code, message: err.message });
+        if (err instanceof KeyStoreError) {
+          return reply
+            .code(keyErrorStatus(err.code))
+            .send({ error: err.code, message: redact(err.message) });
         }
         throw err;
       }
@@ -179,8 +200,9 @@ export const keyRoutes: FastifyPluginAsync = async (fastify) => {
         });
       } catch (err) {
         if (err instanceof KeyStoreError) {
-          const status = err.code === 'not_found' ? 404 : 400;
-          return reply.code(status).send({ error: err.code, message: redact(err.message) });
+          return reply
+            .code(keyErrorStatus(err.code))
+            .send({ error: err.code, message: redact(err.message) });
         }
         throw err;
       }
@@ -210,8 +232,9 @@ export const keyRoutes: FastifyPluginAsync = async (fastify) => {
         });
       } catch (err) {
         if (err instanceof KeyStoreError) {
-          const status = err.code === 'not_found' ? 404 : 409;
-          return reply.code(status).send({ error: err.code, message: redact(err.message) });
+          return reply
+            .code(keyErrorStatus(err.code))
+            .send({ error: err.code, message: redact(err.message) });
         }
         throw err;
       }
@@ -243,8 +266,9 @@ export const keyRoutes: FastifyPluginAsync = async (fastify) => {
         });
       } catch (err) {
         if (err instanceof KeyStoreError) {
-          const status = err.code === 'not_found' ? 404 : 409;
-          return reply.code(status).send({ error: err.code, message: redact(err.message) });
+          return reply
+            .code(keyErrorStatus(err.code))
+            .send({ error: err.code, message: redact(err.message) });
         }
         throw err;
       }

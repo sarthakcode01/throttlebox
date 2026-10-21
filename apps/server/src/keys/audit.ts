@@ -55,6 +55,15 @@ export async function recordEvent(input: RecordEventInput): Promise<void> {
  *
  * Used on the authentication hot path, where losing an audit row is far less
  * bad than failing the request itself.
+ *
+ * **Known limitation:** an unauthenticated caller who knows a valid
+ * `public_id` can trigger one INSERT per request by sending the wrong secret.
+ * The public id is not secret — it appears in the key's display prefix and in
+ * logs — so this is a write amplification vector, bounded only by whatever
+ * rate limit sits in front of the endpoint. Phase 4's limiter runs *after*
+ * verification, so it does not cover this path. Two things close it: a
+ * retention policy on `api_key_events`, and either sampling or de-duplicating
+ * repeated failures for the same key inside a short window.
  */
 export async function recordEventSafe(input: RecordEventInput): Promise<void> {
   try {

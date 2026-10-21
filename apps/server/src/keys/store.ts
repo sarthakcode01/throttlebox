@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne } from 'drizzle-orm';
 import {
   DEFAULT_KEY_SCOPE,
   KEY_SCOPES,
@@ -66,6 +66,7 @@ export class KeyStoreError extends Error {
       | 'already_revoked'
       | 'invalid_scopes'
       | 'invalid_grace'
+      | 'invalid_expiry'
       | 'duplicate_idempotency_key',
     message: string,
   ) {
@@ -125,7 +126,7 @@ export async function createKey(input: CreateKeyInput): Promise<StoredKeyResult>
   if (input.expiresInDays != null) {
     const days = Math.floor(input.expiresInDays);
     if (days < 1 || days > MAX_EXPIRY_DAYS) {
-      throw new KeyStoreError('invalid_scopes', `expiresInDays must be 1–${MAX_EXPIRY_DAYS}`);
+      throw new KeyStoreError('invalid_expiry', `expiresInDays must be 1–${MAX_EXPIRY_DAYS}`);
     }
     expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
   }
@@ -297,9 +298,25 @@ export async function rotateKey(input: RotateKeyInput): Promise<StoredKeyResult>
 
     if (!row) throw new Error('Failed to create rotated api key');
 
-    // The old key keeps `status = 'active'`; the grace window is what retires
-    // it. Verification checks `grace_until` explicitly.
-    await tx.update(apiKeys).set({ graceUntil }).where(eq(apiKeys.id, existing.id));
+    // Retire every *current* key in the family except the one we just minted.
+    //
+    // A key is "current" when it has no grace window. The naive version of
+    // this — only setting `grace_until` on the key that was rotated — breaks
+    // when the same key is rotated twice: the first successor becomes an
+    // orphan that is still marked current, and it would keep working forever.
+    //
+    // A family must have at most one current key at a time.
+    await tx
+      .update(apiKeys)
+      .set({ graceUntil })
+      .where(
+        and(
+          eq(apiKeys.familyId, existing.familyId),
+          eq(apiKeys.status, 'active'),
+          isNull(apiKeys.graceUntil),
+          ne(apiKeys.id, row.id),
+        ),
+      );
 
     return row;
   });

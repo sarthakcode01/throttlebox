@@ -70,6 +70,20 @@ export default function KeysPage() {
     },
   });
 
+  /**
+   * Dismiss the one-time reveal.
+   *
+   * Resetting the mutation matters: React Query keeps the last successful
+   * result in its cache, and that result contains the raw key. Without the
+   * reset the secret would sit in memory for the rest of the page's life,
+   * which contradicts the promise that it is shown exactly once.
+   */
+  function dismissReveal() {
+    setRevealed(null);
+    createMutation.reset();
+    rotateMutation.reset();
+  }
+
   function message(err: unknown): string {
     return err instanceof ApiError ? err.message : 'Something went wrong';
   }
@@ -171,7 +185,7 @@ export default function KeysPage() {
         </div>
       )}
 
-      {revealed && <KeyReveal result={revealed} onDismiss={() => setRevealed(null)} />}
+      {revealed && <KeyReveal result={revealed} onDismiss={dismissReveal} />}
 
       {creating && (
         <CreateKeyDialog

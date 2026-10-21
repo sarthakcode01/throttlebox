@@ -27,6 +27,20 @@ const cookieOptions = {
 } as const;
 
 /**
+ * The CSRF cookie is deliberately readable by JavaScript — the client copies
+ * it into the `X-CSRF-Token` header on every mutation. It must not be
+ * `httpOnly`, but it still gets the same transport attributes as the session
+ * cookie.
+ */
+const csrfCookieOptions = {
+  httpOnly: false,
+  secure: isProduction,
+  sameSite: 'lax',
+  path: '/',
+  domain: isProduction ? config.COOKIE_DOMAIN : undefined,
+} as const;
+
+/**
  * A pre-computed Argon2id hash of a random string. Verifying against it when
  * no user is found keeps the login timing profile flat, so response time
  * doesn't reveal whether an email is registered.
@@ -97,11 +111,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         ...cookieOptions,
         expires: session.expiresAt,
       })
-      .setCookie(CSRF_COOKIE, session.csrfToken, {
-        // Readable by JS on purpose — the client echoes it in X-CSRF-Token.
-        httpOnly: false,
-        path: '/',
-      });
+      .setCookie(CSRF_COOKIE, session.csrfToken, csrfCookieOptions);
 
     return reply.code(201).send({ user, org });
   });
@@ -145,10 +155,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         ...cookieOptions,
         expires: session.expiresAt,
       })
-      .setCookie(CSRF_COOKIE, session.csrfToken, {
-        httpOnly: false,
-        path: '/',
-      });
+      .setCookie(CSRF_COOKIE, session.csrfToken, csrfCookieOptions);
 
     return reply.send({ user: { id: user.id, email: user.email, name: user.name } });
   });

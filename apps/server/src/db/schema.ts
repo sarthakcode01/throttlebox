@@ -184,6 +184,10 @@ export const apiKeyEvents = pgTable(
     id: bigserial('id', { mode: 'number' }).primaryKey(),
     keyId: uuid('key_id').references(() => apiKeys.id, { onDelete: 'set null' }),
     familyId: uuid('family_id'),
+    // Deliberately not a foreign key. The audit trail is meant to outlive the
+    // objects it describes — if an org is deleted, the record of what its keys
+    // did stays. The cost is that deleting an org leaves orphan rows, which
+    // a retention job has to sweep.
     orgId: uuid('org_id').notNull(),
     /** Null means the key itself was the actor (a failed auth attempt). */
     actorUserId: uuid('actor_user_id').references(() => users.id, { onDelete: 'set null' }),

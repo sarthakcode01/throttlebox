@@ -1,6 +1,7 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import type { KeyEnv } from '@throttlebox/shared';
 import { config } from '../config.js';
+import { safeEqualHex } from '../util/crypto.js';
 import {
   buildDisplayPrefix,
   buildKey,
@@ -71,19 +72,10 @@ export function hashSecret(publicId: string, secret: string): string {
 /**
  * Compare two hex digests in constant time.
  *
- * `timingSafeEqual` throws when the buffers differ in length, so the length
- * check happens first — that check is not secret, since both sides are digests
- * of the same expected length.
+ * Re-exported from `util/crypto` so the key module and the auth module share
+ * one implementation.
  */
-export function safeEqualHex(a: string, b: string): boolean {
-  const expected = Buffer.from(a, 'hex');
-  const actual = Buffer.from(b, 'hex');
-
-  if (expected.length !== actual.length) return false;
-  if (expected.length === 0) return false;
-
-  return timingSafeEqual(expected, actual);
-}
+export { safeEqualHex };
 
 /**
  * A digest of a fixed dummy value, used to keep the timing profile of a failed

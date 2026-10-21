@@ -43,7 +43,14 @@ first key.
 No third-party auth provider. Passwords are hashed with **Argon2id**; sessions are
 random 256-bit tokens stored **hashed** (SHA-256) in Postgres for audit and cached
 in **Redis** for fast lookup, delivered as an `httpOnly` cookie with sliding
-expiration. A readable CSRF cookie is echoed back in `X-CSRF-Token` on mutations.
+expiration.
+
+CSRF uses the **double-submit** pattern: a second, readable cookie carries a
+random token that the client echoes back in `X-CSRF-Token` on every mutation,
+and the server compares the two in constant time. A cross-site page can cause
+the browser to send the cookies, but it cannot read the token, so it cannot
+produce a matching header. Requests that carry an `Authorization` header are
+exempt — those are authenticated by a token a browser never attaches on its own.
 
 ```bash
 # Register (creates a user + a personal org + a session)
