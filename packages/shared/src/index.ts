@@ -216,7 +216,8 @@ export interface CreateMockRouteRequest {
 export interface MockPreviewResponse {
   statusCode: number;
   headers: Record<string, string>;
-  body: unknown;
+  /** The serialized body, exactly as it goes over the wire. */
+  body: string;
   /** Which route matched. */
   matchedRoute: string | null;
   /** Milliseconds the artificial latency would add. */

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { mockRoutes, mockServices } from '../db/schema.js';
 import type {
@@ -305,6 +305,17 @@ export async function createRoute(
   return toRouteSummary(row);
 }
 
+/** Postgres unique-violation SQLSTATE. */
+const UNIQUE_VIOLATION = '23505';
+
+/**
+ * Update a route.
+ *
+ * The unique index on (service, method, path) is the real guard against
+ * duplicates, so the check here is a courtesy that produces a useful error
+ * message. The violation can still arrive from the index, so it is caught
+ * here rather than being allowed to surface as an unhandled database error.
+ */
 export async function updateRoute(
   orgId: string,
   routeId: string,
@@ -321,23 +332,54 @@ export async function updateRoute(
 
   const route = existing.mock_routes;
 
-  const [row] = await db
-    .update(mockRoutes)
-    .set({
-      method: input.method ?? route.method,
-      path: input.path?.trim() ?? route.path,
-      summary: input.summary ?? route.summary,
-      description: input.description ?? route.description,
-      statusCode: input.statusCode ?? route.statusCode,
-      responseTemplate:
-        input.responseTemplate === undefined ? route.responseTemplate : input.responseTemplate,
-      responseHeaders: input.responseHeaders ?? route.responseHeaders,
-      latencyMs: input.latencyMs ?? route.latencyMs,
-      isActive: input.isActive ?? route.isActive,
-      updatedAt: new Date(),
-    })
-    .where(eq(mockRoutes.id, routeId))
-    .returning();
+  const method = input.method ?? route.method;
+  const path = input.path?.trim() ?? route.path;
+
+  if (method !== route.method || path !== route.path) {
+    const clash = await db
+      .select({ id: mockRoutes.id })
+      .from(mockRoutes)
+      .where(
+        and(
+          eq(mockRoutes.serviceId, route.serviceId),
+          eq(mockRoutes.method, method),
+          eq(mockRoutes.path, path),
+          ne(mockRoutes.id, routeId),
+        ),
+      )
+      .limit(1);
+
+    if (clash.length > 0) {
+      throw new MockError('duplicate', `${method} ${path} already exists on this service`);
+    }
+  }
+
+  let row: typeof mockRoutes.$inferSelect | undefined;
+
+  try {
+    [row] = await db
+      .update(mockRoutes)
+      .set({
+        method,
+        path,
+        summary: input.summary ?? route.summary,
+        description: input.description ?? route.description,
+        statusCode: input.statusCode ?? route.statusCode,
+        responseTemplate:
+          input.responseTemplate === undefined ? route.responseTemplate : input.responseTemplate,
+        responseHeaders: input.responseHeaders ?? route.responseHeaders,
+        latencyMs: input.latencyMs ?? route.latencyMs,
+        isActive: input.isActive ?? route.isActive,
+        updatedAt: new Date(),
+      })
+      .where(eq(mockRoutes.id, routeId))
+      .returning();
+  } catch (err) {
+    if ((err as { code?: string }).code === UNIQUE_VIOLATION) {
+      throw new MockError('duplicate', `${method} ${path} already exists on this service`);
+    }
+    throw err;
+  }
 
   if (!row) throw new MockError('not_found', 'Route not found');
 

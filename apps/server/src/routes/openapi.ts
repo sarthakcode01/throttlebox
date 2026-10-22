@@ -1,13 +1,31 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { getServiceBySlug, listRoutes } from '../mock/services.js';
 import { buildOpenApiDocument } from '../mock/openapi.js';
+import { extractBearerKey } from '../keys/middleware.js';
+import { verifyKey } from '../keys/verify.js';
+
+/**
+ * Resolve the organization the request belongs to.
+ *
+ * Either a dashboard session or an API key works. A developer pasting the
+ * document into a client generator has an API key, not a browser session, so
+ * requiring a session would make the document useless outside the dashboard.
+ */
+async function resolveOrgId(request: FastifyRequest): Promise<string | null> {
+  if (request.auth?.orgId) return request.auth.orgId;
+
+  const raw = extractBearerKey(request);
+  if (!raw) return null;
+
+  const context = await verifyKey(raw);
+  return context?.orgId ?? null;
+}
 
 /**
  * The OpenAPI document for a mock service.
  *
- * Public, because a developer is expected to paste it into their own tools.
- * The document describes the shape of the API, not anybody's data.
+ * It describes the shape of the API, not anybody's data.
  */
 export const openApiRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/docs/:serviceSlug/openapi.json', async (request, reply) => {
@@ -16,17 +34,19 @@ export const openApiRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: 'validation_error', message: 'Invalid service slug' });
     }
 
-    const auth = request.auth;
-    if (!auth?.orgId) {
-      return reply.code(403).send({ error: 'forbidden', message: 'No organization membership' });
+    const orgId = await resolveOrgId(request);
+    if (!orgId) {
+      return reply
+        .code(403)
+        .send({ error: 'forbidden', message: 'Sign in or use an API key to read the document' });
     }
 
-    const service = await getServiceBySlug(auth.orgId, params.data.serviceSlug);
+    const service = await getServiceBySlug(orgId, params.data.serviceSlug);
     if (!service) {
       return reply.code(404).send({ error: 'not_found', message: 'Service not found' });
     }
 
-    const routeRows = await listRoutes(auth.orgId, service.id);
+    const routeRows = await listRoutes(orgId, service.id);
     const document = buildOpenApiDocument({
       serviceName: service.name,
       serviceSlug: service.slug,

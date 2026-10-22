@@ -10,6 +10,7 @@ declare module 'react' {
     interface IntrinsicElements {
       'elements-api': DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement> & {
         apiDescriptionUrl?: string;
+        apiDescription?: Record<string, unknown>;
         router?: string;
         layout?: string;
       };

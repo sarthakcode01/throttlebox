@@ -6,6 +6,7 @@ import { authPlugin } from './auth/middleware.js';
 import { keyAuthPlugin } from './keys/middleware.js';
 import { startTouchFlusher, stopTouchFlusher } from './keys/touch.js';
 import { registerLenientContentType } from './http/contentType.js';
+import { registerErrorHandler } from './http/errorHandler.js';
 import { registerHealthRoutes } from './http/health.js';
 import { registerSecurityHeaders } from './http/securityHeaders.js';
 import { startSessionJanitor, stopSessionJanitor } from './auth/janitor.js';
@@ -43,6 +44,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await fastify.register(keyAuthPlugin);
 
   registerLenientContentType(fastify);
+  registerErrorHandler(fastify);
   registerSecurityHeaders(fastify);
 
   // ---- Health ---------------------------------------------------------

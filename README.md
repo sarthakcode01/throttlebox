@@ -103,9 +103,12 @@ are refused at every step, and only own properties are read. A template can
 never take the server down — a failure resolves to `undefined` and the
 response still renders.
 
-**Responses are stable.** The seed is derived from the API key and the request
-path, so `/products/42` always returns the same product, while `/products/99`
-returns something different. Your assertions do not become flaky.
+**Responses are stable.** The seed is derived from the organization, the
+service, and the request path — not from the credential. So `/products/42`
+always returns the same product, `/products/99` returns something different,
+two keys in the same organization see the same thing, and the dashboard
+preview shows exactly what a caller will receive. Your assertions do not
+become flaky.
 
 Each new organization starts with a seeded **E-commerce** service, so there is
 something to call within a minute of signing up.
@@ -115,8 +118,10 @@ something to call within a minute of signing up.
 curl -H "Authorization: Bearer sk_test_..." \
   http://localhost:3001/mock/ecommerce/products/42
 
-# The OpenAPI document for a service
+# The OpenAPI document for a service — with a session or an API key
 curl -b cookies.txt http://localhost:3001/docs/ecommerce/openapi.json
+curl -H "Authorization: Bearer sk_test_..." \
+  http://localhost:3001/docs/ecommerce/openapi.json
 ```
 
 ### How API keys work

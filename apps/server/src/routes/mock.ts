@@ -49,19 +49,42 @@ interface MockHandlerOptions {
 
 interface MockParams {
   serviceSlug: string;
-  '*': string;
+  /** The path after the service slug, still percent-encoded. */
+  remaining: string;
 }
 
 /**
- * The wildcard route hands Fastify a generic request, so the params are
- * untyped. This narrows them to the two we know are there.
+ * Work out the path the caller asked for.
+ *
+ * The wildcard parameter is not used for the path itself. Fastify decodes
+ * route parameters, and `find-my-way` would decode the path again on the
+ * way in — so a value like `a%2520b` would be decoded twice and arrive as
+ * `a b` instead of `a%20b`. A `%2F` was worse: it became a real slash, split
+ * the path, and the route stopped matching at all.
+ *
+ * Taking the raw URL and letting `find-my-way` do the decoding means it
+ * happens exactly once, and an encoded slash stays inside its parameter.
  */
 function mockParams(request: FastifyRequest): MockParams {
-  const params = request.params as Partial<MockParams> | undefined;
-  return {
-    serviceSlug: params?.serviceSlug ?? '',
-    '*': params?.['*'] ?? '',
-  };
+  const params = request.params as (Partial<MockParams> & { '*'?: string }) | undefined;
+  const serviceSlug = params?.serviceSlug ?? '';
+
+  const rawUrl = request.raw.url ?? '';
+  // `request.raw.url` is the path and query as they arrived. Strip the query
+  // and, if the request line carried an absolute URL, the origin.
+  let rawPath = rawUrl.split('?')[0] ?? '';
+  const schemeEnd = rawPath.indexOf('://');
+  if (schemeEnd !== -1) {
+    const pathStart = rawPath.indexOf('/', schemeEnd + 3);
+    rawPath = pathStart === -1 ? '/' : rawPath.slice(pathStart);
+  }
+
+  const prefix = `/mock/${serviceSlug}`;
+  const remaining = rawPath.startsWith(prefix)
+    ? rawPath.slice(prefix.length)
+    : (params?.['*'] ?? '');
+
+  return { serviceSlug, remaining: remaining || '/' };
 }
 
 /**
@@ -81,12 +104,12 @@ async function renderMockResponse(
   latencyMs: number;
 }> {
   const auth = options.preview
-    ? { orgId: options.preview.orgId, keyId: 'preview' }
-    : { orgId: request.keyAuth!.orgId, keyId: request.keyAuth!.keyId };
+    ? { orgId: options.preview.orgId }
+    : { orgId: request.keyAuth!.orgId };
 
   const params = mockParams(request);
   const serviceSlug = options.preview ? options.preview.serviceSlug : params.serviceSlug;
-  const remaining = options.preview ? options.preview.path : params['*'];
+  const remaining = options.preview ? options.preview.path : params.remaining;
 
   const router = await getServiceRouter(auth.orgId, serviceSlug);
   if (!router) {
@@ -135,9 +158,14 @@ async function renderMockResponse(
     query,
     body: options.preview ? options.preview.body : request.body,
     headers: request.headers as Record<string, string>,
-    // Deterministic: the same resource always returns the same data, so a
-    // developer can rely on a product keeping its id and price.
-    seed: seedFrom(auth.keyId, method, path),
+    // Deterministic, and scoped to the *organization* rather than the key.
+    //
+    // The mock data belongs to the service, not to the credential: two keys
+    // in the same organization must see the same product, or "the same
+    // resource" would change depending on which key called it. Scoping by
+    // organization also means the dashboard preview renders exactly what a
+    // caller receives, because both sides derive the same seed.
+    seed: seedFrom(auth.orgId, serviceSlug, method, path),
   });
 
   const rendered = renderTemplate(match.route.responseTemplate, context);

@@ -408,6 +408,21 @@ select:focus {
 
 /* ---- Code inputs ----------------------------------------------------- */
 
+.code-block {
+  background: #0e1117;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 textarea.code-input {
   background: #0e1117;
   border: 1px solid var(--border);

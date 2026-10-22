@@ -6,6 +6,7 @@ import type {
   CreateMockRouteRequest,
   CreateMockServiceRequest,
   HttpMethod,
+  MockPreviewResponse,
   MockRouteSummary,
   MockServiceSummary,
 } from '@throttlebox/shared';
@@ -57,6 +58,7 @@ export default function ServicesPage() {
   const [creatingService, setCreatingService] = useState(false);
   const [editingRoute, setEditingRoute] = useState<MockRouteSummary | null>(null);
   const [creatingRoute, setCreatingRoute] = useState(false);
+  const [previewing, setPreviewing] = useState<MockRouteSummary | null>(null);
 
   const { createService, createRoute, updateRoute } = useServiceMutations();
 
@@ -201,6 +203,12 @@ export default function ServicesPage() {
                           <div className="row" style={{ gap: 8, flexWrap: 'nowrap' }}>
                             <button
                               className="secondary small"
+                              onClick={() => setPreviewing(route)}
+                            >
+                              Preview
+                            </button>
+                            <button
+                              className="secondary small"
                               onClick={() => setEditingRoute(route)}
                             >
                               Edit
@@ -260,6 +268,10 @@ export default function ServicesPage() {
           }}
           onSubmit={(body) => updateRoute.mutate({ id: editingRoute.id, body })}
         />
+      )}
+
+      {previewing && selected && (
+        <PreviewDialog service={selected} route={previewing} onClose={() => setPreviewing(null)} />
       )}
     </main>
   );
@@ -338,6 +350,111 @@ function ServiceForm({ pending, error, onCancel, onSubmit }: ServiceFormProps) {
           </button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+/**
+ * The live preview.
+ *
+ * The server renders the response through the same code path a caller would
+ * hit, so what appears here is exactly what the endpoint returns — including
+ * the values the template resolved.
+ */
+function PreviewDialog({
+  service,
+  route,
+  onClose,
+}: {
+  service: MockServiceSummary;
+  route: MockRouteSummary;
+  onClose: () => void;
+}) {
+  const [path, setPath] = useState(route.path);
+  const [result, setResult] = useState<MockPreviewResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const preview = useMutation({
+    mutationFn: () =>
+      api.previewMock({
+        serviceSlug: service.slug,
+        method: route.method,
+        path: path.startsWith('/') ? path : `/${path}`,
+      }),
+    onSuccess: (data) => {
+      setResult(data);
+      setError(null);
+    },
+    onError: (err) => {
+      setResult(null);
+      setError(err instanceof ApiError ? err.message : 'Could not render the preview');
+    },
+  });
+
+  return (
+    <Modal title={`Preview ${route.method} ${route.path}`} onClose={onClose}>
+      <div className="stack">
+        <p className="muted" style={{ margin: 0 }}>
+          Edit the path to try different parameter values. The response is rendered by the same code
+          a real caller would hit.
+        </p>
+
+        <div className="row" style={{ alignItems: 'flex-end' }}>
+          <div style={{ flex: 1 }}>
+            <label htmlFor="preview-path">Path</label>
+            <input
+              id="preview-path"
+              value={path}
+              onChange={(event) => setPath(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') preview.mutate();
+              }}
+            />
+          </div>
+          <button onClick={() => preview.mutate()} disabled={preview.isPending}>
+            {preview.isPending ? 'Rendering…' : 'Render'}
+          </button>
+        </div>
+
+        {error && <div className="error">{error}</div>}
+
+        {result && (
+          <>
+            <div className="row">
+              <span className="muted">Status</span>
+              <code>{result.statusCode}</code>
+              {result.matchedRoute && (
+                <>
+                  <span className="muted">Matched</span>
+                  <code>{result.matchedRoute}</code>
+                </>
+              )}
+              {result.latencyMs > 0 && (
+                <>
+                  <span className="muted">Latency</span>
+                  <code>{result.latencyMs}ms</code>
+                </>
+              )}
+            </div>
+
+            {Object.keys(result.headers).length > 0 && (
+              <div>
+                <label>Response headers</label>
+                <pre className="code-block">
+                  {Object.entries(result.headers)
+                    .map(([name, value]) => `${name}: ${value}`)
+                    .join('\n')}
+                </pre>
+              </div>
+            )}
+
+            <div>
+              <label>Body</label>
+              <pre className="code-block">{result.body}</pre>
+            </div>
+          </>
+        )}
+      </div>
     </Modal>
   );
 }

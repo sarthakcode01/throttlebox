@@ -150,6 +150,12 @@ describe('mock endpoint', () => {
       statusCode: 201,
       responseTemplate: { created: true, name: '{{body.name}}' },
     });
+    await createRoute(org.orgId, serviceId, {
+      method: 'GET',
+      path: '/encoded/:value',
+      statusCode: 200,
+      responseTemplate: { value: '{{params.value}}' },
+    });
 
     const full = await createKey({
       orgId: org.orgId,
@@ -292,5 +298,45 @@ describe('mock endpoint', () => {
       .set('Authorization', `Bearer ${readKey}`);
 
     expect(first.body).toEqual(second.body);
+  });
+
+  it('returns the same data for two different keys in the same org', async () => {
+    // The mock data belongs to the service, not to the credential. If the
+    // seed were derived from the key, "the same product" would change
+    // depending on which key asked for it.
+    const other = await createKey({
+      orgId: org.orgId,
+      name: 'second-reader',
+      env: 'test',
+      scopes: ['mock:read'],
+      createdBy: org.userId,
+    });
+
+    const first = await request(server)
+      .get(`/mock/${serviceSlug}/items/42`)
+      .set('Authorization', `Bearer ${readKey}`);
+    const second = await request(server)
+      .get(`/mock/${serviceSlug}/items/42`)
+      .set('Authorization', `Bearer ${other.key}`);
+
+    expect(second.body).toEqual(first.body);
+  });
+
+  it('decodes a percent-encoded path parameter exactly once', async () => {
+    // "a%20b" is the literal text a%20b, encoded as a%2520b. Decoding twice
+    // would turn it into "a b".
+    const literal = await request(server)
+      .get(`/mock/${serviceSlug}/encoded/${encodeURIComponent('a%20b')}`)
+      .set('Authorization', `Bearer ${readKey}`);
+    expect(literal.status).toBe(200);
+    expect(literal.body.value).toBe('a%20b');
+
+    // An encoded slash stays inside the parameter instead of splitting the
+    // path and breaking the match.
+    const slash = await request(server)
+      .get(`/mock/${serviceSlug}/encoded/${encodeURIComponent('a/b')}`)
+      .set('Authorization', `Bearer ${readKey}`);
+    expect(slash.status).toBe(200);
+    expect(slash.body.value).toBe('a/b');
   });
 });
