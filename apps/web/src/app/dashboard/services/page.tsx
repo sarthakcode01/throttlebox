@@ -1,6 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
 import type {
   CreateMockRouteRequest,
@@ -15,17 +16,18 @@ import Modal from '@/components/Modal';
 
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
-/**
- * The mutations the page needs.
- *
- * Declared in one place so the forms below can take them as props and stay
- * free of query-client plumbing.
- */
 function useServiceMutations() {
   const queryClient = useQueryClient();
 
   const createService = useMutation({
     mutationFn: api.createMockService,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['mock-services'] });
+    },
+  });
+
+  const deleteService = useMutation({
+    mutationFn: (id: string) => api.deleteMockService(id),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['mock-services'] });
     },
@@ -49,18 +51,28 @@ function useServiceMutations() {
     },
   });
 
-  return { createService, createRoute, updateRoute };
+  const deleteRoute = useMutation({
+    mutationFn: (id: string) => api.deleteMockRoute(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['mock-routes'] });
+      await queryClient.invalidateQueries({ queryKey: ['mock-services'] });
+    },
+  });
+
+  return { createService, deleteService, createRoute, updateRoute, deleteRoute };
 }
 
 export default function ServicesPage() {
-  const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creatingService, setCreatingService] = useState(false);
   const [editingRoute, setEditingRoute] = useState<MockRouteSummary | null>(null);
   const [creatingRoute, setCreatingRoute] = useState(false);
   const [previewing, setPreviewing] = useState<MockRouteSummary | null>(null);
+  const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  const { createService, createRoute, updateRoute } = useServiceMutations();
+  const { createService, deleteService, createRoute, updateRoute, deleteRoute } =
+    useServiceMutations();
 
   const servicesQuery = useQuery({
     queryKey: ['mock-services'],
@@ -78,159 +90,380 @@ export default function ServicesPage() {
     retry: false,
   });
 
-  const deleteRoute = useMutation({
-    mutationFn: (id: string) => api.deleteMockRoute(id),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['mock-routes'] });
-      await queryClient.invalidateQueries({ queryKey: ['mock-services'] });
-    },
-  });
+  const routes = routesQuery.data?.routes ?? [];
 
   function message(err: unknown): string {
     return err instanceof ApiError ? err.message : 'Something went wrong';
   }
 
-  if (servicesQuery.isLoading) {
-    return (
-      <main>
-        <div className="card">Loading your mock APIs…</div>
-      </main>
-    );
-  }
+  const handleCopy = (text: string, id: string) => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      setCopiedKey(id);
+      setTimeout(() => setCopiedKey(null), 2000);
+    }
+  };
 
-  if (servicesQuery.error) {
-    return (
-      <main>
-        <div className="error">{message(servicesQuery.error)}</div>
-      </main>
-    );
-  }
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
   return (
-    <main>
-      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 24 }}>
+    <div>
+      {/* Top Header */}
+      <div className="dashboard-header-row">
         <div>
-          <h1 style={{ marginBottom: 4 }}>Mock APIs</h1>
-          <p className="muted" style={{ margin: 0 }}>
-            Each service is a backend your code can call. Responses are rendered from a template.
+          <h1 className="dashboard-title">Mock APIs Studio</h1>
+          <p className="dashboard-subtitle">
+            Define realistic mock endpoints, parameter bindings, and dynamic Faker response
+            templates without deploying custom code.
           </p>
         </div>
-        <button onClick={() => setCreatingService(true)}>New service</button>
+
+        <div className="row">
+          {selected && (
+            <button
+              onClick={() => setCreatingRoute(true)}
+              className="cta-button"
+              style={{ fontSize: '0.875rem' }}
+            >
+              + Add Route
+            </button>
+          )}
+          <button
+            onClick={() => setCreatingService(true)}
+            className="secondary-button"
+            style={{ fontSize: '0.875rem' }}
+          >
+            New Service
+          </button>
+        </div>
       </div>
 
-      {services.length === 0 ? (
-        <div className="card">
-          <p className="muted" style={{ margin: 0 }}>
-            No mock services yet. Create one to start building an endpoint.
+      {servicesQuery.error && (
+        <div className="error" role="alert" style={{ marginBottom: '20px' }}>
+          {message(servicesQuery.error)}
+        </div>
+      )}
+
+      {servicesQuery.isLoading && (
+        <div className="card text-center" style={{ padding: '40px' }}>
+          <div className="muted">Loading workspace mock APIs…</div>
+        </div>
+      )}
+
+      {!servicesQuery.isLoading && services.length === 0 ? (
+        <div className="card text-center" style={{ padding: '48px 24px' }}>
+          <div style={{ color: 'var(--accent)', marginBottom: '12px' }}>
+            <svg
+              width="36"
+              height="36"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <polyline points="16 18 22 12 16 6" />
+              <polyline points="8 6 2 12 8 18" />
+            </svg>
+          </div>
+          <h3 style={{ margin: '0 0 8px' }}>No Mock Services Created</h3>
+          <p className="muted" style={{ margin: '0 0 20px', fontSize: '0.875rem' }}>
+            Build a mock backend to serve deterministic JSON data with custom latency and status
+            codes.
           </p>
+          <button
+            onClick={() => setCreatingService(true)}
+            className="cta-button"
+            style={{ display: 'inline-flex' }}
+          >
+            + Create First Mock Service
+          </button>
         </div>
       ) : (
-        <div className="split">
-          <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
-            <table className="keys-table">
-              <thead>
-                <tr>
-                  <th>Service</th>
-                  <th>Slug</th>
-                  <th>Routes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {services.map((service) => (
-                  <tr
-                    key={service.id}
-                    onClick={() => setSelectedId(service.id)}
-                    className={service.id === selected?.id ? 'selected' : undefined}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td>{service.name}</td>
-                    <td>
-                      <code>{service.slug}</code>
-                    </td>
-                    <td className="muted">{service.routeCount}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        /* Studio Master-Detail Split Grid */
+        <div className="studio-grid">
+          {/* Left Pane: Services List */}
+          <div className="studio-list-card">
+            <div className="studio-list-head">
+              <span
+                style={{
+                  fontSize: '0.8125rem',
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  color: 'var(--muted)',
+                }}
+              >
+                Services ({services.length})
+              </span>
+              <button
+                onClick={() => setCreatingService(true)}
+                className="secondary-button"
+                style={{ padding: '2px 8px', fontSize: '0.75rem' }}
+              >
+                + New
+              </button>
+            </div>
+
+            <div>
+              {services.map((svc) => (
+                <div
+                  key={svc.id}
+                  className={`studio-item ${selected?.id === svc.id ? 'selected' : ''}`}
+                  onClick={() => setSelectedId(svc.id)}
+                >
+                  <div style={{ minWidth: 0, paddingRight: '8px' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text)' }}>
+                      {svc.name}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+                      slug: <code>{svc.slug}</code>
+                    </div>
+                  </div>
+                  <span className="badge" style={{ color: 'var(--accent)', flexShrink: 0 }}>
+                    {svc.routeCount} routes
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
 
-          {selected && (
-            <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
-              <div
-                className="row"
-                style={{ justifyContent: 'space-between', padding: '16px 20px' }}
-              >
-                <div>
-                  <h2 style={{ margin: 0 }}>{selected.name}</h2>
-                  <p className="muted" style={{ margin: '4px 0 0' }}>
-                    <code>/mock/{selected.slug}</code>
-                  </p>
+          {/* Right Pane: Selected Service Routes & Details */}
+          {selected ? (
+            <div className="stack" style={{ gap: '20px' }}>
+              {/* Service Meta Card */}
+              <div className="card" style={{ padding: '20px 24px' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    marginBottom: '12px',
+                    flexWrap: 'wrap',
+                    gap: '12px',
+                  }}
+                >
+                  <div>
+                    <h2 style={{ margin: '0 0 4px', fontSize: '1.25rem' }}>{selected.name}</h2>
+                    <p className="muted" style={{ margin: 0, fontSize: '0.875rem' }}>
+                      {selected.description || 'No description provided.'}
+                    </p>
+                  </div>
+
+                  <div className="row" style={{ gap: '8px' }}>
+                    <Link
+                      href="/dashboard/docs"
+                      className="secondary-button"
+                      style={{ padding: '6px 12px', fontSize: '0.8125rem' }}
+                    >
+                      OpenAPI Docs &rarr;
+                    </Link>
+                    <button
+                      onClick={() => setDeletingServiceId(selected.id)}
+                      className="secondary-button"
+                      style={{
+                        padding: '6px 12px',
+                        fontSize: '0.8125rem',
+                        color: 'var(--danger)',
+                        borderColor: 'rgba(255, 107, 107, 0.4)',
+                      }}
+                    >
+                      Delete Service
+                    </button>
+                  </div>
                 </div>
-                <button className="secondary" onClick={() => setCreatingRoute(true)}>
-                  Add route
-                </button>
+
+                {/* Base URL Pill */}
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    background: '#090c10',
+                    border: '1px solid var(--border)',
+                    borderRadius: '6px',
+                    padding: '8px 14px',
+                    fontSize: '0.8125rem',
+                    color: 'var(--muted)',
+                  }}
+                >
+                  <span>Base Endpoint:</span>
+                  <code style={{ color: 'var(--text)' }}>
+                    {apiUrl}/mock/{selected.slug}
+                  </code>
+                  <button
+                    onClick={() => handleCopy(`${apiUrl}/mock/${selected.slug}`, 'service-base')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: copiedKey === 'service-base' ? 'var(--success)' : 'var(--accent)',
+                      cursor: 'pointer',
+                      padding: '0 4px',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {copiedKey === 'service-base' ? '✓ Copied' : 'Copy'}
+                  </button>
+                </div>
               </div>
 
-              {routesQuery.isLoading ? (
-                <div className="card" style={{ border: 'none' }}>
-                  Loading routes…
+              {/* Endpoints List */}
+              <div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: '14px',
+                  }}
+                >
+                  <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>
+                    Configured Routes ({routes.length})
+                  </h3>
+                  <button
+                    onClick={() => setCreatingRoute(true)}
+                    className="cta-button"
+                    style={{ padding: '6px 12px', fontSize: '0.8125rem' }}
+                  >
+                    + Add Route
+                  </button>
                 </div>
-              ) : (
-                <table className="keys-table">
-                  <thead>
-                    <tr>
-                      <th>Method</th>
-                      <th>Path</th>
-                      <th>Status</th>
-                      <th>Summary</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(routesQuery.data?.routes ?? []).map((route) => (
-                      <tr key={route.id}>
-                        <td>
-                          <span className={`badge method-${route.method.toLowerCase()}`}>
+
+                {routesQuery.isLoading && (
+                  <div className="card text-center" style={{ padding: '30px' }}>
+                    <div className="muted">Loading routes…</div>
+                  </div>
+                )}
+
+                {!routesQuery.isLoading && routes.length === 0 ? (
+                  <div className="card text-center" style={{ padding: '40px 24px' }}>
+                    <p className="muted" style={{ margin: '0 0 14px', fontSize: '0.875rem' }}>
+                      This service doesn&apos;t have any active endpoints yet.
+                    </p>
+                    <button
+                      onClick={() => setCreatingRoute(true)}
+                      className="cta-button"
+                      style={{ display: 'inline-flex', padding: '8px 14px' }}
+                    >
+                      + Create First Endpoint
+                    </button>
+                  </div>
+                ) : (
+                  routes.map((route) => {
+                    const methodClass = `method-${route.method.toLowerCase()}`;
+                    return (
+                      <div key={route.id} className="route-card-item">
+                        <div className="route-info-left">
+                          <span
+                            className={`badge ${methodClass}`}
+                            style={{ minWidth: '60px', textAlign: 'center' }}
+                          >
                             {route.method}
                           </span>
-                        </td>
-                        <td>
-                          <code>{route.path}</code>
-                        </td>
-                        <td className="muted">{route.statusCode}</td>
-                        <td className="muted">{route.summary || '—'}</td>
-                        <td>
-                          <div className="row" style={{ gap: 8, flexWrap: 'nowrap' }}>
-                            <button
-                              className="secondary small"
-                              onClick={() => setPreviewing(route)}
-                            >
-                              Preview
-                            </button>
-                            <button
-                              className="secondary small"
-                              onClick={() => setEditingRoute(route)}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              className="secondary small danger"
-                              onClick={() => deleteRoute.mutate(route.id)}
-                            >
-                              Delete
-                            </button>
+                          <div>
+                            <div className="route-path">{route.path}</div>
+                            {route.summary && (
+                              <div
+                                className="muted"
+                                style={{ fontSize: '0.75rem', marginTop: '2px' }}
+                              >
+                                {route.summary}
+                              </div>
+                            )}
                           </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+                        </div>
+
+                        <div className="row" style={{ gap: '10px' }}>
+                          <span className="badge" style={{ color: 'var(--success)' }}>
+                            {route.statusCode} OK
+                          </span>
+                          {route.latencyMs > 0 && (
+                            <span className="badge" style={{ color: 'var(--muted)' }}>
+                              +{route.latencyMs}ms
+                            </span>
+                          )}
+
+                          <button
+                            className="secondary-button"
+                            style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                            onClick={() => setPreviewing(route)}
+                          >
+                            Live Preview
+                          </button>
+                          <button
+                            className="secondary-button"
+                            style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                            onClick={() => setEditingRoute(route)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="secondary-button"
+                            style={{
+                              padding: '4px 10px',
+                              fontSize: '0.75rem',
+                              color: 'var(--danger)',
+                              borderColor: 'rgba(255, 107, 107, 0.4)',
+                            }}
+                            onClick={() => deleteRoute.mutate(route.id)}
+                            disabled={deleteRoute.isPending}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="card text-center" style={{ padding: '40px' }}>
+              <div className="muted">Select a service on the left to inspect its endpoints.</div>
             </div>
           )}
         </div>
       )}
 
+      {/* Delete Service Confirmation Modal */}
+      {deletingServiceId && selected && (
+        <Modal title="Delete Mock Service" onClose={() => setDeletingServiceId(null)}>
+          <div className="stack">
+            <div className="warning">
+              Deleting service <strong>{selected.name}</strong> will delete all of its routes and
+              OpenAPI specifications. This action cannot be undone.
+            </div>
+            <div
+              className="row"
+              style={{ justifyContent: 'flex-end', gap: '10px', marginTop: '14px' }}
+            >
+              <button className="secondary-button" onClick={() => setDeletingServiceId(null)}>
+                Cancel
+              </button>
+              <button
+                style={{
+                  background: 'var(--danger)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '7px',
+                  padding: '8px 16px',
+                  fontWeight: 600,
+                  cursor: deleteService.isPending ? 'not-allowed' : 'pointer',
+                }}
+                onClick={async () => {
+                  await deleteService.mutateAsync(deletingServiceId);
+                  setDeletingServiceId(null);
+                  setSelectedId(null);
+                }}
+                disabled={deleteService.isPending}
+              >
+                {deleteService.isPending ? 'Deleting…' : 'Delete Service'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Create Service Modal */}
       {creatingService && (
         <ServiceForm
           pending={createService.isPending}
@@ -239,10 +472,15 @@ export default function ServicesPage() {
             setCreatingService(false);
             createService.reset();
           }}
-          onSubmit={(body) => createService.mutate(body)}
+          onSubmit={async (body) => {
+            const res = await createService.mutateAsync(body);
+            setCreatingService(false);
+            setSelectedId(res.service.id);
+          }}
         />
       )}
 
+      {/* Create Route Modal */}
       {creatingRoute && selected && (
         <RouteForm
           service={selected}
@@ -252,10 +490,14 @@ export default function ServicesPage() {
             setCreatingRoute(false);
             createRoute.reset();
           }}
-          onSubmit={(body) => createRoute.mutate({ serviceId: selected.id, body })}
+          onSubmit={async (body) => {
+            await createRoute.mutateAsync({ serviceId: selected.id, body });
+            setCreatingRoute(false);
+          }}
         />
       )}
 
+      {/* Edit Route Modal */}
       {editingRoute && selected && (
         <RouteForm
           service={selected}
@@ -266,19 +508,23 @@ export default function ServicesPage() {
             setEditingRoute(null);
             updateRoute.reset();
           }}
-          onSubmit={(body) => updateRoute.mutate({ id: editingRoute.id, body })}
+          onSubmit={async (body) => {
+            await updateRoute.mutateAsync({ id: editingRoute.id, body });
+            setEditingRoute(null);
+          }}
         />
       )}
 
+      {/* Live Preview Modal */}
       {previewing && selected && (
         <PreviewDialog service={selected} route={previewing} onClose={() => setPreviewing(null)} />
       )}
-    </main>
+    </div>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Forms                                                               */
+/* Modal Dialogs                                                      */
 /* ------------------------------------------------------------------ */
 
 interface ServiceFormProps {
@@ -294,7 +540,7 @@ function ServiceForm({ pending, error, onCancel, onSubmit }: ServiceFormProps) {
   const [description, setDescription] = useState('');
 
   return (
-    <Modal title="New mock service" onClose={onCancel}>
+    <Modal title="Create Mock Service" onClose={onCancel}>
       <form
         className="stack"
         onSubmit={(event) => {
@@ -303,29 +549,29 @@ function ServiceForm({ pending, error, onCancel, onSubmit }: ServiceFormProps) {
         }}
       >
         <div>
-          <label htmlFor="service-name">Name</label>
+          <label htmlFor="service-name">Service Name</label>
           <input
             id="service-name"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="Payments"
+            placeholder="e.g. Products Service"
             required
             maxLength={80}
             autoFocus
           />
         </div>
         <div>
-          <label htmlFor="service-slug">URL slug (optional)</label>
+          <label htmlFor="service-slug">URL Slug (optional)</label>
           <input
             id="service-slug"
             value={slug}
             onChange={(event) => setSlug(event.target.value)}
-            placeholder="payments"
+            placeholder="e.g. products"
             maxLength={40}
           />
-          <p className="muted" style={{ margin: '6px 0 0' }}>
-            Your endpoints will live at{' '}
-            <code>/mock/{slug || name.toLowerCase() || 'your-slug'}</code>.
+          <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.75rem' }}>
+            Endpoints will be served at{' '}
+            <code>/mock/{slug || name.toLowerCase().replace(/\s+/g, '-') || 'slug'}</code>.
           </p>
         </div>
         <div>
@@ -334,19 +580,19 @@ function ServiceForm({ pending, error, onCancel, onSubmit }: ServiceFormProps) {
             id="service-description"
             value={description}
             onChange={(event) => setDescription(event.target.value)}
-            placeholder="What this API is for"
+            placeholder="Catalog and product inventory endpoints"
             maxLength={500}
           />
         </div>
 
         {error && <div className="error">{error}</div>}
 
-        <div className="row">
-          <button type="submit" disabled={pending}>
-            {pending ? 'Creating…' : 'Create service'}
-          </button>
-          <button type="button" className="secondary" onClick={onCancel}>
+        <div className="row" style={{ justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
+          <button type="button" className="secondary-button" onClick={onCancel}>
             Cancel
+          </button>
+          <button type="submit" className="cta-button" disabled={pending}>
+            {pending ? 'Creating…' : 'Create Service'}
           </button>
         </div>
       </form>
@@ -354,13 +600,6 @@ function ServiceForm({ pending, error, onCancel, onSubmit }: ServiceFormProps) {
   );
 }
 
-/**
- * The live preview.
- *
- * The server renders the response through the same code path a caller would
- * hit, so what appears here is exactly what the endpoint returns — including
- * the values the template resolved.
- */
 function PreviewDialog({
   service,
   route,
@@ -392,16 +631,15 @@ function PreviewDialog({
   });
 
   return (
-    <Modal title={`Preview ${route.method} ${route.path}`} onClose={onClose}>
+    <Modal title={`Live Template Preview — ${route.method} ${route.path}`} onClose={onClose}>
       <div className="stack">
-        <p className="muted" style={{ margin: 0 }}>
-          Edit the path to try different parameter values. The response is rendered by the same code
-          a real caller would hit.
+        <p className="muted" style={{ margin: 0, fontSize: '0.875rem' }}>
+          Evaluate Handlebars and Faker expressions through the actual mock execution pipeline.
         </p>
 
-        <div className="row" style={{ alignItems: 'flex-end' }}>
+        <div className="row" style={{ alignItems: 'flex-end', gap: '10px' }}>
           <div style={{ flex: 1 }}>
-            <label htmlFor="preview-path">Path</label>
+            <label htmlFor="preview-path">Test URL Path</label>
             <input
               id="preview-path"
               value={path}
@@ -411,36 +649,40 @@ function PreviewDialog({
               }}
             />
           </div>
-          <button onClick={() => preview.mutate()} disabled={preview.isPending}>
-            {preview.isPending ? 'Rendering…' : 'Render'}
+          <button
+            onClick={() => preview.mutate()}
+            disabled={preview.isPending}
+            className="cta-button"
+            style={{ padding: '10px 18px' }}
+          >
+            {preview.isPending ? 'Rendering…' : 'Execute & Render'}
           </button>
         </div>
 
         {error && <div className="error">{error}</div>}
 
         {result && (
-          <>
-            <div className="row">
-              <span className="muted">Status</span>
-              <code>{result.statusCode}</code>
-              {result.matchedRoute && (
-                <>
-                  <span className="muted">Matched</span>
-                  <code>{result.matchedRoute}</code>
-                </>
-              )}
+          <div className="stack" style={{ gap: '12px', marginTop: '12px' }}>
+            <div className="row" style={{ gap: '12px' }}>
+              <span className="badge" style={{ color: 'var(--success)' }}>
+                Status {result.statusCode}
+              </span>
               {result.latencyMs > 0 && (
-                <>
-                  <span className="muted">Latency</span>
-                  <code>{result.latencyMs}ms</code>
-                </>
+                <span className="badge" style={{ color: 'var(--muted)' }}>
+                  Latency {result.latencyMs}ms
+                </span>
+              )}
+              {result.matchedRoute && (
+                <span className="muted" style={{ fontSize: '0.75rem' }}>
+                  Matched pattern: <code>{result.matchedRoute}</code>
+                </span>
               )}
             </div>
 
             {Object.keys(result.headers).length > 0 && (
               <div>
-                <label>Response headers</label>
-                <pre className="code-block">
+                <label>Emitted Headers</label>
+                <pre className="code-block" style={{ maxHeight: '120px' }}>
                   {Object.entries(result.headers)
                     .map(([name, value]) => `${name}: ${value}`)
                     .join('\n')}
@@ -449,10 +691,12 @@ function PreviewDialog({
             )}
 
             <div>
-              <label>Body</label>
-              <pre className="code-block">{result.body}</pre>
+              <label>Rendered JSON Payload</label>
+              <pre className="code-block" style={{ maxHeight: '280px', color: '#3ecf8e' }}>
+                {result.body}
+              </pre>
             </div>
-          </>
+          </div>
         )}
       </div>
     </Modal>
@@ -474,7 +718,15 @@ function RouteForm({ service, initial, pending, error, onCancel, onSubmit }: Rou
   const [summary, setSummary] = useState(initial?.summary ?? '');
   const [statusCode, setStatusCode] = useState(String(initial?.statusCode ?? 200));
   const [template, setTemplate] = useState(
-    JSON.stringify(initial?.responseTemplate ?? { hello: 'world' }, null, 2),
+    JSON.stringify(
+      initial?.responseTemplate ?? {
+        id: '{{params.id}}',
+        name: '{{faker.commerce.productName}}',
+        price: 99.99,
+      },
+      null,
+      2,
+    ),
   );
   const [templateError, setTemplateError] = useState<string | null>(null);
 
@@ -500,10 +752,10 @@ function RouteForm({ service, initial, pending, error, onCancel, onSubmit }: Rou
   }
 
   return (
-    <Modal title={initial ? 'Edit route' : 'New route'} onClose={onCancel}>
+    <Modal title={initial ? 'Edit Mock Route' : 'Create Mock Route'} onClose={onCancel}>
       <form className="stack" onSubmit={handleSubmit}>
-        <div className="row" style={{ alignItems: 'flex-end' }}>
-          <div style={{ flex: '0 0 120px' }}>
+        <div className="row" style={{ alignItems: 'flex-end', gap: '10px' }}>
+          <div style={{ flex: '0 0 110px' }}>
             <label htmlFor="route-method">Method</label>
             <select
               id="route-method"
@@ -518,7 +770,7 @@ function RouteForm({ service, initial, pending, error, onCancel, onSubmit }: Rou
             </select>
           </div>
           <div style={{ flex: 1, minWidth: 200 }}>
-            <label htmlFor="route-path">Path</label>
+            <label htmlFor="route-path">Endpoint Path</label>
             <input
               id="route-path"
               value={path}
@@ -527,8 +779,8 @@ function RouteForm({ service, initial, pending, error, onCancel, onSubmit }: Rou
               required
             />
           </div>
-          <div style={{ flex: '0 0 110px' }}>
-            <label htmlFor="route-status">Status</label>
+          <div style={{ flex: '0 0 90px' }}>
+            <label htmlFor="route-status">HTTP Code</label>
             <input
               id="route-status"
               type="number"
@@ -540,27 +792,27 @@ function RouteForm({ service, initial, pending, error, onCancel, onSubmit }: Rou
           </div>
         </div>
 
-        <p className="muted" style={{ margin: 0 }}>
-          Served at{' '}
+        <p className="muted" style={{ margin: 0, fontSize: '0.75rem' }}>
+          Caller URL:{' '}
           <code>
             /mock/{service.slug}
-            {path}
+            {path.startsWith('/') ? path : `/${path}`}
           </code>
         </p>
 
         <div>
-          <label htmlFor="route-summary">Summary</label>
+          <label htmlFor="route-summary">Route Summary / Description</label>
           <input
             id="route-summary"
             value={summary}
             onChange={(event) => setSummary(event.target.value)}
-            placeholder="List products"
+            placeholder="e.g. Retrieve single product by id"
             maxLength={200}
           />
         </div>
 
         <div>
-          <label htmlFor="route-template">Response template</label>
+          <label htmlFor="route-template">Response JSON Template</label>
           <textarea
             id="route-template"
             value={template}
@@ -569,21 +821,21 @@ function RouteForm({ service, initial, pending, error, onCancel, onSubmit }: Rou
             spellCheck={false}
             className="code-input"
           />
-          <p className="muted" style={{ margin: '6px 0 0' }}>
-            Use <code>{'{{params.id}}'}</code> for path parameters, <code>{'{{query.page}}'}</code>{' '}
-            for query parameters, and <code>{'{{faker.person.fullName}}'}</code> for realistic data.
+          <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.75rem' }}>
+            Supported tags: <code>{'{{params.<name>}}'}</code>, <code>{'{{query.<name>}}'}</code>,
+            and Faker generators like <code>{'{{faker.commerce.productName}}'}</code>.
           </p>
         </div>
 
         {templateError && <div className="error">{templateError}</div>}
         {error && <div className="error">{error}</div>}
 
-        <div className="row">
-          <button type="submit" disabled={pending}>
-            {pending ? 'Saving…' : initial ? 'Save route' : 'Create route'}
-          </button>
-          <button type="button" className="secondary" onClick={onCancel}>
+        <div className="row" style={{ justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
+          <button type="button" className="secondary-button" onClick={onCancel}>
             Cancel
+          </button>
+          <button type="submit" className="cta-button" disabled={pending}>
+            {pending ? 'Saving Route…' : initial ? 'Save Changes' : 'Create Route'}
           </button>
         </div>
       </form>

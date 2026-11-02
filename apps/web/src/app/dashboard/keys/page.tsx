@@ -35,8 +35,9 @@ export default function KeysPage() {
     retry: false,
   });
 
-  // The raw key lives here and nowhere else. It is never written to
-  // localStorage or sessionStorage, and it is cleared when the dialog closes.
+  const [filterEnv, setFilterEnv] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
   const [revealed, setRevealed] = useState<ApiKeyCreatedResponse | null>(null);
   const [creating, setCreating] = useState(false);
   const [rotating, setRotating] = useState<ApiKeySummary | null>(null);
@@ -70,14 +71,6 @@ export default function KeysPage() {
     },
   });
 
-  /**
-   * Dismiss the one-time reveal.
-   *
-   * Resetting the mutation matters: React Query keeps the last successful
-   * result in its cache, and that result contains the raw key. Without the
-   * reset the secret would sit in memory for the rest of the page's life,
-   * which contradicts the promise that it is shown exactly once.
-   */
   function dismissReveal() {
     setRevealed(null);
     createMutation.reset();
@@ -88,105 +81,207 @@ export default function KeysPage() {
     return err instanceof ApiError ? err.message : 'Something went wrong';
   }
 
-  if (isLoading) {
-    return (
-      <main>
-        <div className="card">Loading your API keys…</div>
-      </main>
-    );
-  }
-
-  if (error) {
-    return (
-      <main>
-        <div className="error">{message(error)}</div>
-      </main>
-    );
-  }
-
-  const keys = data?.keys ?? [];
+  const allKeys = data?.keys ?? [];
+  const filteredKeys = allKeys.filter((key) => {
+    const matchesEnv = filterEnv === 'all' || key.env === filterEnv;
+    const matchesSearch =
+      searchQuery.trim() === '' ||
+      key.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      key.display.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesEnv && matchesSearch;
+  });
 
   return (
-    <main>
-      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 24 }}>
+    <div>
+      {/* Header Row */}
+      <div className="dashboard-header-row">
         <div>
-          <h1 style={{ marginBottom: 4 }}>API keys</h1>
-          <p className="muted" style={{ margin: 0 }}>
-            Keys authenticate calls to your mock APIs. The secret is shown once and never stored.
+          <h1 className="dashboard-title">API Key Management</h1>
+          <p className="dashboard-subtitle">
+            Cryptographically peppered keys authenticating calls to your mock endpoints. Secrets are
+            shown once upon creation.
           </p>
         </div>
-        <button onClick={() => setCreating(true)}>Create key</button>
+
+        <button
+          onClick={() => setCreating(true)}
+          className="cta-button"
+          style={{ fontSize: '0.875rem' }}
+        >
+          + Mint API Key
+        </button>
       </div>
 
-      {keys.length === 0 ? (
-        <div className="card">
-          <p className="muted" style={{ margin: 0 }}>
-            No API keys yet. Create one to start calling your mock endpoints.
+      {/* Filter and Search Bar */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '16px',
+          marginBottom: '20px',
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          {['all', 'test', 'live', 'dev'].map((env) => (
+            <button
+              key={env}
+              onClick={() => setFilterEnv(env)}
+              className="secondary-button"
+              style={{
+                padding: '4px 12px',
+                fontSize: '0.75rem',
+                textTransform: 'uppercase',
+                background: filterEnv === env ? 'var(--accent-dim)' : 'var(--surface)',
+                color: filterEnv === env ? 'var(--accent)' : 'var(--muted)',
+                borderColor: filterEnv === env ? 'var(--accent)' : 'var(--border)',
+                fontWeight: filterEnv === env ? 700 : 500,
+              }}
+            >
+              {env}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ width: '280px' }}>
+          <input
+            placeholder="Search keys by name or prefix…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{ padding: '6px 12px', fontSize: '0.8125rem' }}
+          />
+        </div>
+      </div>
+
+      {/* Error alert */}
+      {error && (
+        <div className="error" role="alert" style={{ marginBottom: '20px' }}>
+          {message(error)}
+        </div>
+      )}
+
+      {/* Loading state */}
+      {isLoading && (
+        <div className="card text-center" style={{ padding: '40px' }}>
+          <div className="muted">Loading workspace API keys…</div>
+        </div>
+      )}
+
+      {/* Keys Table */}
+      {!isLoading && filteredKeys.length === 0 ? (
+        <div className="card text-center" style={{ padding: '48px 24px' }}>
+          <div style={{ color: 'var(--muted)', marginBottom: '12px' }}>
+            <svg
+              width="32"
+              height="32"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path d="M21 2l-2 2m-1-1l-3 3m2 2l-2 2m-7 1a5 5 0 1 1-7-7 5 5 0 0 1 7 7zm0 0l7 7-2 2" />
+            </svg>
+          </div>
+          <h3 style={{ margin: '0 0 8px' }}>
+            {allKeys.length === 0 ? 'No API Keys Minted' : 'No Keys Match Your Filter'}
+          </h3>
+          <p className="muted" style={{ margin: '0 0 20px', fontSize: '0.875rem' }}>
+            {allKeys.length === 0
+              ? 'Mint an API key to authenticate requests against your sliding-window mock APIs.'
+              : 'Try clearing your search query or environment filter.'}
           </p>
+          {allKeys.length === 0 && (
+            <button
+              onClick={() => setCreating(true)}
+              className="cta-button"
+              style={{ display: 'inline-flex' }}
+            >
+              + Mint First API Key
+            </button>
+          )}
         </div>
       ) : (
         <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
           <table className="keys-table">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Key</th>
+                <th>Key Name</th>
+                <th>Public Identifier</th>
                 <th>Env</th>
-                <th>Scopes</th>
+                <th>Granted Scopes</th>
                 <th>Status</th>
-                <th>Last used</th>
-                <th />
+                <th>Last Active</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {keys.map((key) => (
-                <tr key={key.id}>
-                  <td>{key.name}</td>
-                  <td>
-                    <code>{key.display}</code>
-                  </td>
-                  <td>
-                    <span className={`badge ${key.env}`}>{key.env}</span>
-                  </td>
-                  <td>
-                    <span className="muted">{key.scopes.join(', ')}</span>
-                  </td>
-                  <td>
-                    <span className={`badge ${key.status}`}>
-                      {key.graceUntil && key.status === 'active' ? 'rotating' : key.status}
-                    </span>
-                  </td>
-                  <td className="muted">{formatDate(key.lastUsedAt)}</td>
-                  <td>
-                    <div className="row" style={{ gap: 8, flexWrap: 'nowrap' }}>
-                      <button
-                        className="secondary small"
-                        onClick={() => setRotating(key)}
-                        disabled={key.status === 'revoked'}
-                      >
-                        Rotate
-                      </button>
-                      <button
-                        className="secondary small danger"
-                        onClick={() => {
-                          setRevoking(key);
-                          setRevokeConfirmation('');
-                        }}
-                        disabled={key.status === 'revoked'}
-                      >
-                        Revoke
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {filteredKeys.map((key) => {
+                const isRotating = key.graceUntil && key.status === 'active';
+                return (
+                  <tr key={key.id}>
+                    <td>
+                      <strong>{key.name}</strong>
+                    </td>
+                    <td>
+                      <code>{key.display}</code>
+                    </td>
+                    <td>
+                      <span className={`badge ${key.env}`}>{key.env}</span>
+                    </td>
+                    <td>
+                      <span className="muted" style={{ fontSize: '0.8125rem' }}>
+                        {key.scopes.join(', ')}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`badge ${isRotating ? 'method-put' : key.status}`}>
+                        {isRotating ? 'rotating (24h grace)' : key.status}
+                      </span>
+                    </td>
+                    <td className="muted" style={{ fontSize: '0.8125rem' }}>
+                      {formatDate(key.lastUsedAt)}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <div className="row" style={{ justifyContent: 'flex-end', gap: '8px' }}>
+                        <button
+                          className="secondary-button"
+                          style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                          onClick={() => setRotating(key)}
+                          disabled={key.status === 'revoked'}
+                        >
+                          Rotate
+                        </button>
+                        <button
+                          className="secondary-button"
+                          style={{
+                            padding: '4px 10px',
+                            fontSize: '0.75rem',
+                            color: 'var(--danger)',
+                            borderColor: 'rgba(255, 107, 107, 0.4)',
+                          }}
+                          onClick={() => {
+                            setRevoking(key);
+                            setRevokeConfirmation('');
+                          }}
+                          disabled={key.status === 'revoked'}
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
+      {/* One-time reveal modal */}
       {revealed && <KeyReveal result={revealed} onDismiss={dismissReveal} />}
 
+      {/* Create key dialog */}
       {creating && (
         <CreateKeyDialog
           pending={createMutation.isPending}
@@ -199,65 +294,90 @@ export default function KeysPage() {
         />
       )}
 
+      {/* Rotate key modal */}
       {rotating && (
-        <Modal title="Rotate key" onClose={() => setRotating(null)}>
+        <Modal title="Rotate API Key" onClose={() => setRotating(null)}>
           <div className="stack">
-            <p className="muted" style={{ margin: 0 }}>
-              A new key will be issued for <strong>{rotating.name}</strong>. The current key keeps
-              working for 24 hours so you can swap it over without downtime, then it stops working
-              on its own.
+            <p className="muted" style={{ margin: 0, fontSize: '0.9rem' }}>
+              A new cryptographically secure successor key will be minted for{' '}
+              <strong style={{ color: 'var(--text)' }}>{rotating.name}</strong>. The current key
+              will remain valid for a 24-hour grace window to ensure zero-downtime key rotation
+              across your deployments.
             </p>
             {rotateMutation.error && <div className="error">{message(rotateMutation.error)}</div>}
-            <div className="row">
+            <div
+              className="row"
+              style={{ justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}
+            >
+              <button className="secondary-button" onClick={() => setRotating(null)}>
+                Cancel
+              </button>
               <button
+                className="cta-button"
                 onClick={() => rotateMutation.mutate({ id: rotating.id })}
                 disabled={rotateMutation.isPending}
               >
-                {rotateMutation.isPending ? 'Rotating…' : 'Rotate key'}
-              </button>
-              <button className="secondary" onClick={() => setRotating(null)}>
-                Cancel
+                {rotateMutation.isPending ? 'Rotating Key…' : 'Confirm Rotation'}
               </button>
             </div>
           </div>
         </Modal>
       )}
 
+      {/* Revoke key modal */}
       {revoking && (
-        <Modal title="Revoke key" onClose={() => setRevoking(null)}>
+        <Modal title="Revoke API Key" onClose={() => setRevoking(null)}>
           <div className="stack">
             <div className="warning">
-              Revoking <strong>{revoking.name}</strong> takes effect immediately. Any request using
-              it will start failing with a 401.
+              Revoking <strong style={{ color: 'var(--text)' }}>{revoking.name}</strong> is
+              permanent and takes effect immediately across all cluster pods. Incoming requests will
+              instantly receive a 401 Unauthorized status.
             </div>
             <div>
-              <label htmlFor="confirm">
-                Type <code>{revoking.name}</code> to confirm
+              <label htmlFor="confirm-key-name">
+                Type <code>{revoking.name}</code> to confirm revocation:
               </label>
               <input
-                id="confirm"
+                id="confirm-key-name"
                 value={revokeConfirmation}
                 onChange={(event) => setRevokeConfirmation(event.target.value)}
                 autoComplete="off"
+                placeholder={revoking.name}
               />
             </div>
             {revokeMutation.error && <div className="error">{message(revokeMutation.error)}</div>}
-            <div className="row">
+            <div
+              className="row"
+              style={{ justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}
+            >
+              <button className="secondary-button" onClick={() => setRevoking(null)}>
+                Cancel
+              </button>
               <button
-                className="danger-button"
+                style={{
+                  background: 'var(--danger)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '7px',
+                  padding: '8px 16px',
+                  fontWeight: 600,
+                  cursor:
+                    revokeConfirmation !== revoking.name || revokeMutation.isPending
+                      ? 'not-allowed'
+                      : 'pointer',
+                  opacity:
+                    revokeConfirmation !== revoking.name || revokeMutation.isPending ? 0.6 : 1,
+                }}
                 onClick={() => revokeMutation.mutate({ id: revoking.id })}
                 disabled={revokeConfirmation !== revoking.name || revokeMutation.isPending}
               >
-                {revokeMutation.isPending ? 'Revoking…' : 'Revoke key'}
-              </button>
-              <button className="secondary" onClick={() => setRevoking(null)}>
-                Cancel
+                {revokeMutation.isPending ? 'Revoking Key…' : 'Permanently Revoke Key'}
               </button>
             </div>
           </div>
         </Modal>
       )}
-    </main>
+    </div>
   );
 }
 
@@ -287,40 +407,36 @@ function CreateKeyDialog({ pending, error, onCancel, onSubmit }: CreateKeyDialog
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-
     const expiresInDays = expiry ? Number.parseInt(expiry, 10) : null;
-
     onSubmit({
       name: name.trim(),
       env,
-      // An empty selection would be rejected by the server, so keep at least
-      // the read scope.
       scopes: scopes.length > 0 ? scopes : ['mock:read'],
       expiresInDays: expiry && Number.isFinite(expiresInDays) ? expiresInDays : null,
     });
   }
 
   return (
-    <Modal title="Create an API key" onClose={onCancel}>
+    <Modal title="Mint New API Key" onClose={onCancel}>
       <form className="stack" onSubmit={handleSubmit}>
         <div>
-          <label htmlFor="key-name">Name</label>
+          <label htmlFor="key-name">Key Name</label>
           <input
             id="key-name"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="staging-backend"
+            placeholder="e.g. ci-pipeline-key"
             required
             maxLength={80}
             autoFocus
           />
-          <p className="muted" style={{ margin: '6px 0 0' }}>
-            Something that tells you where this key is used.
+          <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.75rem' }}>
+            A descriptive label identifying where this key is deployed.
           </p>
         </div>
 
         <div>
-          <label htmlFor="key-env">Environment</label>
+          <label htmlFor="key-env">Target Environment</label>
           <select
             id="key-env"
             value={env}
@@ -328,14 +444,14 @@ function CreateKeyDialog({ pending, error, onCancel, onSubmit }: CreateKeyDialog
           >
             {KEY_ENVS.map((option) => (
               <option key={option} value={option}>
-                {option}
+                {option.toUpperCase()} ({option})
               </option>
             ))}
           </select>
         </div>
 
         <div>
-          <label>Scopes</label>
+          <label>Authorized Scopes</label>
           <div className="scope-list">
             {KEY_SCOPES.map((scope) => (
               <label key={scope} className="scope-option">
@@ -345,18 +461,15 @@ function CreateKeyDialog({ pending, error, onCancel, onSubmit }: CreateKeyDialog
                   onChange={() => toggleScope(scope)}
                 />
                 <span>
-                  {SCOPE_LABELS[scope]} <code>{scope}</code>
+                  {SCOPE_LABELS[scope]} <code style={{ fontSize: '0.75rem' }}>{scope}</code>
                 </span>
               </label>
             ))}
           </div>
-          <p className="muted" style={{ margin: '6px 0 0' }}>
-            Scopes can only be widened. To narrow them later, rotate the key.
-          </p>
         </div>
 
         <div>
-          <label htmlFor="key-expiry">Expires in (days, optional)</label>
+          <label htmlFor="key-expiry">Expiration Window (days, optional)</label>
           <input
             id="key-expiry"
             type="number"
@@ -364,18 +477,18 @@ function CreateKeyDialog({ pending, error, onCancel, onSubmit }: CreateKeyDialog
             max={365}
             value={expiry}
             onChange={(event) => setExpiry(event.target.value)}
-            placeholder="Never"
+            placeholder="Never expires"
           />
         </div>
 
         {error && <div className="error">{error}</div>}
 
-        <div className="row">
-          <button type="submit" disabled={pending}>
-            {pending ? 'Creating…' : 'Create key'}
-          </button>
-          <button type="button" className="secondary" onClick={onCancel}>
+        <div className="row" style={{ justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
+          <button type="button" className="secondary-button" onClick={onCancel}>
             Cancel
+          </button>
+          <button type="submit" className="cta-button" disabled={pending}>
+            {pending ? 'Minting Key…' : 'Mint Key'}
           </button>
         </div>
       </form>
