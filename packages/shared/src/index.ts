@@ -19,9 +19,9 @@ export type Role = (typeof ROLES)[number];
  */
 export const PERMISSIONS: Record<Role, readonly string[]> = {
   owner: ['*'],
-  admin: ['keys:*', 'members:invite', 'plugins:deploy', 'mock:*', 'chaos:*'],
-  dev: ['keys:create', 'keys:read', 'keys:rotate', 'keys:revoke', 'mock:*', 'chaos:*'],
-  viewer: ['keys:read', 'mock:read'],
+  admin: ['keys:*', 'members:invite', 'plugins:deploy', 'mock:*', 'chaos:*', 'org:*', 'analytics:*'],
+  dev: ['keys:create', 'keys:read', 'keys:rotate', 'keys:revoke', 'mock:*', 'chaos:*', 'analytics:*'],
+  viewer: ['keys:read', 'mock:read', 'analytics:read'],
 };
 
 export function roleHasPermission(role: Role, permission: string): boolean {
@@ -36,16 +36,56 @@ export function roleHasPermission(role: Role, permission: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Plans
+// Plans & Rate Limiting (Phase 4)
 // ---------------------------------------------------------------------------
 
 export const PLANS = ['free', 'pro'] as const;
 export type Plan = (typeof PLANS)[number];
 
-export const PLAN_LIMITS: Record<Plan, { requests: number; windowSeconds: number }> = {
-  free: { requests: 100, windowSeconds: 3600 },
-  pro: { requests: 5000, windowSeconds: 3600 },
+export interface PlanConfig {
+  id: Plan;
+  name: string;
+  requestsPerWindow: number;
+  windowSeconds: number;
+  burstAllowance: number;
+}
+
+export const PLAN_CONFIGS: Record<Plan, PlanConfig> = {
+  free: {
+    id: 'free',
+    name: 'Free',
+    requestsPerWindow: 100,
+    windowSeconds: 3600,
+    burstAllowance: 1.0,
+  },
+  pro: {
+    id: 'pro',
+    name: 'Pro',
+    requestsPerWindow: 5000,
+    windowSeconds: 3600,
+    burstAllowance: 1.2,
+  },
 };
+
+export const PLAN_LIMITS: Record<
+  Plan,
+  { requests: number; windowSeconds: number; burstAllowance: number }
+> = {
+  free: { requests: 100, windowSeconds: 3600, burstAllowance: 1.0 },
+  pro: { requests: 5000, windowSeconds: 3600, burstAllowance: 1.2 },
+};
+
+export interface UpdateOrgPlanRequest {
+  plan: Plan;
+}
+
+export interface RateLimitResult {
+  allowed: boolean;
+  limit: number;
+  remaining: number;
+  resetAt: number; // Unix epoch seconds
+  retryAfter?: number; // seconds (present if allowed === false)
+}
 
 // ---------------------------------------------------------------------------
 // API contracts
@@ -222,4 +262,68 @@ export interface MockPreviewResponse {
   matchedRoute: string | null;
   /** Milliseconds the artificial latency would add. */
   latencyMs: number;
+}
+
+// ---------------------------------------------------------------------------
+// Analytics & Logging (Phase 5)
+// ---------------------------------------------------------------------------
+
+export interface RequestLogSummary {
+  time: string;
+  keyId: string | null;
+  keyDisplay?: string | null;
+  orgId: string;
+  serviceId: string | null;
+  serviceSlug?: string | null;
+  method: string;
+  path: string;
+  statusCode: number;
+  latencyMs: number;
+  rateLimited: boolean;
+  traceId: string;
+}
+
+export interface AnalyticsOverview {
+  totalRequests: number;
+  errorRate: number; // percentage (0 - 100)
+  p95LatencyMs: number;
+  throttledRequests: number;
+  activeKeysCount: number;
+}
+
+export interface AnalyticsUsageBucket {
+  bucket: string; // ISO timestamp
+  requests: number;
+  errors: number;
+  throttled: number;
+}
+
+export interface AnalyticsLatencyBucket {
+  bucket: string; // ISO timestamp
+  p50: number;
+  p95: number;
+  p99: number;
+}
+
+export interface AnalyticsErrorsBreakdown {
+  status2xx: number;
+  status4xx: number;
+  status429: number;
+  status5xx: number;
+  topErrorPaths: { path: string; count: number; statusCode: number }[];
+}
+
+export interface WebhookConfig {
+  id: string;
+  orgId: string;
+  url: string;
+  secret: string; // HMAC secret
+  isActive: boolean;
+  lastAlertedThreshold: number | null;
+  createdAt: string;
+}
+
+export interface CreateWebhookRequest {
+  url: string;
+  secret?: string;
 }

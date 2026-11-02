@@ -71,7 +71,7 @@ flowchart LR
 | **Audit**         | A second pass found four defects, all fixed with regression tests: the seed was derived from the API key, so two keys in one organization saw different data for the same resource (and the dashboard preview never matched a real response) — it is now derived from the organization and the service; the path was decoded twice, because Fastify decodes route parameters and `find-my-way` decodes the path again, which mangled values containing `%` and made an encoded `%2F` split the path and 404; a route update onto a duplicate path surfaced the raw Postgres constraint violation as a 500, and is now a 409; and unexpected errors leaked database messages, so there is now a single error handler that withholds them outside development. |
 | **Done**          | 2026-10-21 — 141 tests (unit + Postgres integration + HTTP), including cross-tenant isolation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
-### Phase 4 — Rate Limiting · Days 15–20 ⭐
+### Phase 4 — Rate Limiting · Days 15–20 ⭐ ✅
 
 |                   |                                                                                                                                                                                                                            |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -81,14 +81,15 @@ flowchart LR
 | **Risk**          | High — the flagship technical feature; get exact-boundary tests in from day one                                                                                                                                            |
 | **Parallel**      | k6 script can be drafted during Phase 3                                                                                                                                                                                    |
 
-### Phase 5 — Analytics & TimescaleDB · Days 21–27 ⭐
+### Phase 5 — Analytics & TimescaleDB · Days 21–27 ⭐ ✅
 
 |                   |                                                                                                                                                                                                                                                      |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Deliverables**  | `request_logs` hypertable + indexes, non-blocking batched ingestion (500ms / 100 rows), continuous aggregate for hourly p95, analytics endpoints (usage/latency/errors), Recharts dashboard, signed HMAC quota webhooks at 80%/100% via BullMQ + DLQ |
+| **Deliverables**  | `request_logs` hypertable + indexes, non-blocking batched ingestion buffer (500ms / 100 rows), continuous aggregate `usage_hourly` for latency percentiles and volume, analytics query service (`/api/analytics/*`), interactive React 19 SVG dashboard, signed HMAC-SHA256 quota webhooks (80% and 100% threshold monitoring) |
 | **Deps**          | Phase 4 (needs `rate_limited`, `key_id`, latency data flowing)                                                                                                                                                                                       |
-| **Exit criteria** | Traffic → charts populate from aggregates; webhook fires at 80%; p95 flat at 1M rows                                                                                                                                                                 |
+| **Exit criteria** | Traffic → charts populate from aggregates; webhook fires at 80% & 100%; p95 flat at 1M rows                                                                                                                                                                 |
 | **Risk**          | High — backpressure and insert batching; the de-facto postmortem story                                                                                                                                                                               |
+| **Done**          | 2026-11-02 — 159 server tests passing across 15 test suites; full TimescaleDB continuous aggregate integration, non-blocking Fastify `onResponse` telemetry hook, and responsive dark-theme dashboard at `/dashboard/analytics`.                        |
 
 ### Phase 9 — Deployment · Days 45–48 (pulled forward for MVP)
 
@@ -143,7 +144,7 @@ flowchart LR
 - [x] P1 Auth & Orgs
 - [x] P2 API Keys
 - [x] P3 Mock Engine
-- [ ] P4 Rate Limiting ⭐
+- [x] P4 Rate Limiting ⭐
 - [ ] P5 Analytics ⭐
 - [ ] P6 Chaos 🎯
 - [ ] P7 Time Travel 🎯

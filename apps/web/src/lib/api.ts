@@ -12,6 +12,15 @@ import type {
   MockServiceSummary,
   RegisterRequest,
   RotateKeyRequest,
+  Plan,
+  PlanConfig,
+  AnalyticsOverview,
+  AnalyticsUsageBucket,
+  AnalyticsLatencyBucket,
+  AnalyticsErrorsBreakdown,
+  RequestLogSummary,
+  WebhookConfig,
+  CreateWebhookRequest,
 } from '@throttlebox/shared';
 
 /**
@@ -170,5 +179,52 @@ export const api = {
     request<MockPreviewResponse>('/api/mock/preview', {
       method: 'POST',
       body: JSON.stringify(body),
+    }),
+  // ---- Organization & Tiers --------------------------------------------
+
+  getOrgPlan: () => request<{ plan: PlanConfig }>('/api/org/plan'),
+
+  updateOrgPlan: (plan: Plan) =>
+    request<{ ok: boolean; plan: PlanConfig }>('/api/org/plan', {
+      method: 'PATCH',
+      body: JSON.stringify({ plan }),
+    }),
+
+  // ---- Analytics & Webhooks (Phase 5) -----------------------------------
+
+  getAnalyticsOverview: (range = '24h') =>
+    request<AnalyticsOverview>(`/api/analytics/overview?range=${encodeURIComponent(range)}`),
+
+  getAnalyticsUsage: (range = '24h', keyId?: string, serviceId?: string) => {
+    const params = new URLSearchParams({ range });
+    if (keyId) params.set('keyId', keyId);
+    if (serviceId) params.set('serviceId', serviceId);
+    return request<{ series: AnalyticsUsageBucket[] }>(`/api/analytics/usage?${params.toString()}`);
+  },
+
+  getAnalyticsLatency: (range = '24h') =>
+    request<{ series: AnalyticsLatencyBucket[] }>(`/api/analytics/latency?range=${encodeURIComponent(range)}`),
+
+  getAnalyticsErrors: (range = '24h') =>
+    request<AnalyticsErrorsBreakdown>(`/api/analytics/errors?range=${encodeURIComponent(range)}`),
+
+  getAnalyticsLogs: (limit = 50, offset = 0) =>
+    request<{ logs: RequestLogSummary[]; total: number }>(`/api/analytics/logs?limit=${limit}&offset=${offset}`),
+
+  getWebhooks: () =>
+    request<{ webhooks: WebhookConfig[] }>('/api/analytics/webhooks'),
+
+  createWebhook: (body: CreateWebhookRequest) =>
+    request<WebhookConfig>('/api/analytics/webhooks', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  deleteWebhook: (id: string) =>
+    request<{ success: boolean }>(`/api/analytics/webhooks/${id}`, { method: 'DELETE' }),
+
+  testWebhook: (id: string) =>
+    request<{ success: boolean; statusCode?: number; error?: string }>(`/api/analytics/webhooks/${id}/test`, {
+      method: 'POST',
     }),
 };

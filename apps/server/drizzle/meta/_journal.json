@@ -20,6 +20,20 @@
       "when": 1792585709546,
       "tag": "0002_jittery_oracle",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793620048633,
+      "tag": "0003_nasty_tarot",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793641730904,
+      "tag": "0004_hesitant_mongoose",
+      "breakpoints": true
     }
   ],
   "version": "7",

@@ -6,6 +6,7 @@ import {
   inet,
   integer,
   jsonb,
+  numeric,
   pgEnum,
   pgTable,
   text,
@@ -25,6 +26,19 @@ export const planEnum = pgEnum('plan', PLANS);
 export const keyEnvEnum = pgEnum('key_env', KEY_ENVS);
 export const keyStatusEnum = pgEnum('key_status', KEY_STATUSES);
 export const httpMethodEnum = pgEnum('http_method', HTTP_METHODS);
+
+// ---------------------------------------------------------------------------
+// Plans (Phase 4)
+// ---------------------------------------------------------------------------
+
+export const plans = pgTable('plans', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  requestsPerWindow: integer('requests_per_window').notNull(),
+  windowSeconds: integer('window_seconds').notNull(),
+  burstAllowance: numeric('burst_allowance', { precision: 3, scale: 2 }).notNull().default('1.00'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 // ---------------------------------------------------------------------------
 // Tables
@@ -303,6 +317,52 @@ export const mockRoutes = pgTable(
 // Relations
 // ---------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------
+// Telemetry & Logging (Phase 5)
+// ---------------------------------------------------------------------------
+
+export const requestLogs = pgTable(
+  'request_logs',
+  {
+    time: timestamp('time', { withTimezone: true }).notNull().defaultNow(),
+    keyId: uuid('key_id').references(() => apiKeys.id, { onDelete: 'set null' }),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    serviceId: uuid('service_id').references(() => mockServices.id, { onDelete: 'set null' }),
+    method: text('method').notNull(),
+    path: text('path').notNull(),
+    statusCode: integer('status_code').notNull(),
+    latencyMs: integer('latency_ms').notNull(),
+    rateLimited: boolean('rate_limited').notNull().default(false),
+    traceId: text('trace_id').notNull(),
+  },
+  (table) => [
+    index('request_logs_time_idx').on(table.time.desc()),
+    index('request_logs_org_time_idx').on(table.orgId, table.time.desc()),
+    index('request_logs_key_time_idx').on(table.keyId, table.time.desc()),
+    index('request_logs_service_time_idx').on(table.serviceId, table.time.desc()),
+  ],
+);
+
+export const orgWebhooks = pgTable(
+  'org_webhooks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    url: text('url').notNull(),
+    secret: text('secret').notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    lastAlertedThreshold: integer('last_alerted_threshold'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('org_webhooks_org_idx').on(table.orgId)],
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
   memberships: many(orgMembers),
@@ -347,6 +407,17 @@ export const mockRoutesRelations = relations(mockRoutes, ({ one }) => ({
   service: one(mockServices, { fields: [mockRoutes.serviceId], references: [mockServices.id] }),
 }));
 
+
+export const requestLogsRelations = relations(requestLogs, ({ one }) => ({
+  org: one(orgs, { fields: [requestLogs.orgId], references: [orgs.id] }),
+  key: one(apiKeys, { fields: [requestLogs.keyId], references: [apiKeys.id] }),
+  service: one(mockServices, { fields: [requestLogs.serviceId], references: [mockServices.id] }),
+}));
+
+export const orgWebhooksRelations = relations(orgWebhooks, ({ one }) => ({
+  org: one(orgs, { fields: [orgWebhooks.orgId], references: [orgs.id] }),
+}));
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
@@ -359,3 +430,10 @@ export type MockService = typeof mockServices.$inferSelect;
 export type NewMockService = typeof mockServices.$inferInsert;
 export type MockRoute = typeof mockRoutes.$inferSelect;
 export type NewMockRoute = typeof mockRoutes.$inferInsert;
+export type PlanRow = typeof plans.$inferSelect;
+export type NewPlanRow = typeof plans.$inferInsert;
+
+export type RequestLog = typeof requestLogs.$inferSelect;
+export type NewRequestLog = typeof requestLogs.$inferInsert;
+export type OrgWebhook = typeof orgWebhooks.$inferSelect;
+export type NewOrgWebhook = typeof orgWebhooks.$inferInsert;

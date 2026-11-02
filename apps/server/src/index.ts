@@ -4,6 +4,8 @@ import cors from '@fastify/cors';
 import { config, isProduction } from './config.js';
 import { authPlugin } from './auth/middleware.js';
 import { keyAuthPlugin } from './keys/middleware.js';
+import { rateLimitPlugin } from './ratelimit/middleware.js';
+import { startTierPubSub, stopTierPubSub } from './ratelimit/tier.js';
 import { startTouchFlusher, stopTouchFlusher } from './keys/touch.js';
 import { registerLenientContentType } from './http/contentType.js';
 import { registerErrorHandler } from './http/errorHandler.js';
@@ -15,6 +17,10 @@ import { keyRoutes } from './routes/keys.js';
 import { mockRoutes, mockPreviewRoutes } from './routes/mock.js';
 import { openApiRoutes } from './routes/openapi.js';
 import { serviceRoutes } from './routes/services.js';
+import { orgRoutes } from './routes/org.js';
+import { analyticsRoutes } from './routes/analytics.js';
+import { startIngestFlusher, stopIngestFlusher, setQuotaCheckCallback } from './analytics/ingest.js';
+import { checkOrgQuotas } from './analytics/quotaMonitor.js';
 
 export async function buildServer(): Promise<FastifyInstance> {
   // Trust `X-Forwarded-For` only when a proxy count is configured. With
@@ -42,6 +48,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await fastify.register(cookie);
   await fastify.register(authPlugin);
   await fastify.register(keyAuthPlugin);
+  await fastify.register(rateLimitPlugin);
 
   registerLenientContentType(fastify);
   registerErrorHandler(fastify);
@@ -54,6 +61,8 @@ export async function buildServer(): Promise<FastifyInstance> {
   await fastify.register(authRoutes, { prefix: '/api' });
   await fastify.register(keyRoutes, { prefix: '/api' });
   await fastify.register(serviceRoutes, { prefix: '/api' });
+  await fastify.register(orgRoutes, { prefix: '/api' });
+  await fastify.register(analyticsRoutes, { prefix: '/api' });
   await fastify.register(mockPreviewRoutes, { prefix: '/api' });
 
   // The public mock API and its OpenAPI document live outside /api — they
@@ -68,13 +77,18 @@ async function main() {
   const fastify = await buildServer();
   startTouchFlusher();
   startSessionJanitor();
+  startTierPubSub();
+  setQuotaCheckCallback(checkOrgQuotas);
+  startIngestFlusher();
 
   // Flush buffered writes and purge expired rows on shutdown, so a deploy
   // does not lose them.
   const shutdown = async (signal: string) => {
     fastify.log.info({ signal }, 'shutting down');
+    await stopIngestFlusher();
     await stopTouchFlusher();
     await stopSessionJanitor();
+    await stopTierPubSub();
     await fastify.close();
     process.exit(0);
   };

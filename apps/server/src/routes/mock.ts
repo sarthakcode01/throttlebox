@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { recordRequestLog } from '../analytics/ingest.js';
 import { getServiceRouter } from '../mock/services.js';
 import {
   createTemplateContext,
@@ -125,6 +126,8 @@ async function renderMockResponse(
     };
   }
 
+  (request as unknown as { mockServiceId?: string }).mockServiceId = router.serviceId;
+
   const method = (options.preview ? options.preview.method : request.method).toUpperCase();
   const path = remaining.startsWith('/') ? remaining : `/${remaining}`;
 
@@ -181,6 +184,37 @@ async function renderMockResponse(
 }
 
 export const mockRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.addHook('onResponse', async (request, reply) => {
+    const auth = request.keyAuth;
+    if (!auth) return;
+
+    const latencyMs = Math.round(reply.elapsedTime);
+    const rateLimited = reply.statusCode === 429;
+    const traceId = (request.id as string) || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const reqExt = request as unknown as { mockServiceId?: string };
+    let serviceId = reqExt.mockServiceId ?? null;
+    if (!serviceId) {
+      const p = mockParams(request);
+      if (p.serviceSlug) {
+        const r = await getServiceRouter(auth.orgId, p.serviceSlug);
+        serviceId = r?.serviceId ?? null;
+      }
+    }
+    const rawPath = request.raw.url?.split('?')[0] ?? request.url;
+
+    recordRequestLog({
+      keyId: auth.keyId,
+      orgId: auth.orgId,
+      serviceId,
+      method: request.method.toUpperCase(),
+      path: rawPath,
+      statusCode: reply.statusCode,
+      latencyMs,
+      rateLimited,
+      traceId,
+    });
+  });
+
   const handler = async (request: FastifyRequest, reply: FastifyReply) => {
     const result = await renderMockResponse(request, {});
 
@@ -199,7 +233,7 @@ export const mockRoutes: FastifyPluginAsync = async (fastify) => {
     fastify.route({
       method,
       url: MOCK_URL,
-      preHandler: [fastify.requireKeyAuth, fastify.requireScope('mock:read')],
+      preHandler: [fastify.requireKeyAuth, fastify.requireScope('mock:read'), fastify.rateLimitMock],
       handler,
     });
   }
@@ -208,7 +242,7 @@ export const mockRoutes: FastifyPluginAsync = async (fastify) => {
     fastify.route({
       method,
       url: MOCK_URL,
-      preHandler: [fastify.requireKeyAuth, fastify.requireScope('mock:write')],
+      preHandler: [fastify.requireKeyAuth, fastify.requireScope('mock:write'), fastify.rateLimitMock],
       handler,
     });
   }
