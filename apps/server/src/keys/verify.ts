@@ -3,6 +3,7 @@ import type { KeyEnv, KeyScope } from '@throttlebox/shared';
 import { db } from '../db/client.js';
 import { apiKeyFamilies, apiKeys } from '../db/schema.js';
 import { recordEventSafe } from './audit.js';
+import { getCachedKey, setCachedKey } from './cache.js';
 import { DUMMY_SECRET_HASH, hashSecret, safeEqualHex } from './generate.js';
 import { parseKey, SECRET_LENGTH } from './format.js';
 import { normalizeScopes } from './store.js';
@@ -22,7 +23,7 @@ export interface AuthKeyContext {
  * Ordered, and every step fails closed:
  *
  *   1. parse and validate the shape          malformed          → null
- *   2. SELECT by public_id (unique index)    no row             → null
+ *   2. Redis-cached public_id lookup / DB    no row             → null
  *   3. family not revoked                    revoked family     → null
  *   4. status === 'active'                   revoked key        → null
  *   5. now < expires_at                      expired            → null
@@ -32,48 +33,66 @@ export interface AuthKeyContext {
  * Every failure returns the same `null`. Distinguishing "revoked" from
  * "expired" from "wrong" in the response would be a free oracle; the real
  * reason goes to the audit trail instead.
- *
- * This is the seam that Phase 4 replaces: a Redis-cached public id lookup
- * goes in front of step 2 and a sliding-window limiter goes after step 7.
- * Nothing above this function changes.
  */
 export async function verifyKey(raw: string): Promise<AuthKeyContext | null> {
   // 1. Shape validation.
   const parsed = parseKey(raw);
   if (!parsed) return null;
 
-  // 2. Indexed lookup.
-  const [row] = await db
-    .select({
-      id: apiKeys.id,
-      orgId: apiKeys.orgId,
-      familyId: apiKeys.familyId,
-      env: apiKeys.env,
-      scopes: apiKeys.scopes,
-      status: apiKeys.status,
-      secretHash: apiKeys.secretHash,
-      expiresAt: apiKeys.expiresAt,
-      graceUntil: apiKeys.graceUntil,
-      familyRevokedAt: apiKeyFamilies.revokedAt,
-    })
-    .from(apiKeys)
-    .innerJoin(apiKeyFamilies, eq(apiKeys.familyId, apiKeyFamilies.id))
-    .where(eq(apiKeys.publicId, parsed.publicId))
-    .limit(1);
+  // 2. Redis-cached lookup before hitting Postgres.
+  let row = await getCachedKey(parsed.publicId);
 
   if (!row) {
-    // Burn an equivalent HMAC so a miss costs the same as a hit and an
-    // attacker cannot enumerate valid public ids by timing the response.
-    const dummy = hashSecret(parsed.publicId, 'x'.repeat(SECRET_LENGTH));
-    safeEqualHex(dummy, DUMMY_SECRET_HASH);
-    return null;
+    const [dbRow] = await db
+      .select({
+        id: apiKeys.id,
+        orgId: apiKeys.orgId,
+        familyId: apiKeys.familyId,
+        env: apiKeys.env,
+        scopes: apiKeys.scopes,
+        status: apiKeys.status,
+        secretHash: apiKeys.secretHash,
+        expiresAt: apiKeys.expiresAt,
+        graceUntil: apiKeys.graceUntil,
+        familyRevokedAt: apiKeyFamilies.revokedAt,
+      })
+      .from(apiKeys)
+      .innerJoin(apiKeyFamilies, eq(apiKeys.familyId, apiKeyFamilies.id))
+      .where(eq(apiKeys.publicId, parsed.publicId))
+      .limit(1);
+
+    if (!dbRow) {
+      // Burn an equivalent HMAC so a miss costs the same as a hit and an
+      // attacker cannot enumerate valid public ids by timing the response.
+      const dummy = hashSecret(parsed.publicId, 'x'.repeat(SECRET_LENGTH));
+      safeEqualHex(dummy, DUMMY_SECRET_HASH);
+      return null;
+    }
+
+    row = {
+      id: dbRow.id,
+      orgId: dbRow.orgId,
+      familyId: dbRow.familyId,
+      env: dbRow.env,
+      scopes: dbRow.scopes,
+      status: dbRow.status,
+      secretHash: dbRow.secretHash,
+      expiresAt: dbRow.expiresAt ? dbRow.expiresAt.toISOString() : null,
+      graceUntil: dbRow.graceUntil ? dbRow.graceUntil.toISOString() : null,
+      familyRevokedAt: dbRow.familyRevokedAt ? dbRow.familyRevokedAt.toISOString() : null,
+    };
+
+    await setCachedKey(parsed.publicId, row);
   }
 
   const now = new Date();
+  const expiresAt = row.expiresAt ? new Date(row.expiresAt) : null;
+  const graceUntil = row.graceUntil ? new Date(row.graceUntil) : null;
+  const familyRevokedAt = row.familyRevokedAt ? new Date(row.familyRevokedAt) : null;
   const scopes = normalizeScopes(row.scopes);
 
   // 3. A revoked family kills every key in the chain.
-  if (row.familyRevokedAt) {
+  if (familyRevokedAt) {
     await fail(row, 'auth_failed', 'family_revoked');
     return null;
   }
@@ -85,13 +104,13 @@ export async function verifyKey(raw: string): Promise<AuthKeyContext | null> {
   }
 
   // 5. Expiry.
-  if (row.expiresAt && row.expiresAt <= now) {
+  if (expiresAt && expiresAt <= now) {
     await fail(row, 'expired', 'key_expired');
     return null;
   }
 
   // 6. Grace window. A null grace_until means this is the current key.
-  if (row.graceUntil && row.graceUntil <= now) {
+  if (graceUntil && graceUntil <= now) {
     await fail(row, 'auth_failed', 'grace_elapsed');
     return null;
   }

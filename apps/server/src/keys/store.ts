@@ -10,6 +10,7 @@ import { db } from '../db/client.js';
 import { apiKeyFamilies, apiKeys } from '../db/schema.js';
 import { recordEvent } from './audit.js';
 import { generateKeyMaterial, hashSecret } from './generate.js';
+import { invalidateCachedKey, invalidateCachedKeyById, invalidateFamilyKeyCache } from './cache.js';
 
 /** How long a superseded key keeps working after a rotation. */
 export const DEFAULT_GRACE_HOURS = 24;
@@ -332,6 +333,9 @@ export async function rotateKey(input: RotateKeyInput): Promise<StoredKeyResult>
     metadata: { previousKeyId: existing.id, graceUntil: graceUntil.toISOString(), scopes },
   });
 
+  await invalidateCachedKey(existing.publicId);
+  await invalidateFamilyKeyCache(existing.familyId);
+
   return {
     id: result.id,
     familyId: result.familyId,
@@ -364,7 +368,7 @@ export async function revokeKey(
     .update(apiKeys)
     .set({ status: 'revoked', revokedAt: new Date() })
     .where(and(eq(apiKeys.id, keyId), eq(apiKeys.orgId, orgId), eq(apiKeys.status, 'active')))
-    .returning({ id: apiKeys.id, familyId: apiKeys.familyId });
+    .returning({ id: apiKeys.id, familyId: apiKeys.familyId, publicId: apiKeys.publicId });
 
   if (!row) {
     const [existing] = await db
@@ -386,6 +390,9 @@ export async function revokeKey(
     ip: context.ip,
     userAgent: context.userAgent,
   });
+
+  await invalidateCachedKey(row.publicId);
+  await invalidateCachedKeyById(row.id);
 }
 
 /**
@@ -439,6 +446,8 @@ export async function revokeFamily(
     userAgent: context.userAgent,
     metadata: { keysRevoked: revoked },
   });
+
+  await invalidateFamilyKeyCache(familyId);
 
   return revoked;
 }

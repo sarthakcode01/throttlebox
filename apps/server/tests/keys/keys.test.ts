@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { db } from '../../src/db/client.js';
 import { apiKeyEvents, apiKeys } from '../../src/db/schema.js';
 import { createKey, listKeys, revokeFamily, revokeKey, rotateKey } from '../../src/keys/store.js';
+import { invalidateCachedKeyById } from '../../src/keys/cache.js';
 import { verifyKey } from '../../src/keys/verify.js';
 import { flushTouches } from '../../src/keys/touch.js';
 import { parseKey } from '../../src/keys/format.js';
@@ -150,6 +151,7 @@ describe('verification', () => {
       .update(apiKeys)
       .set({ graceUntil: new Date(Date.now() - 1000) })
       .where(eq(apiKeys.id, created.id));
+    await invalidateCachedKeyById(created.id);
 
     expect(await verifyKey(created.key)).toBeNull();
     expect(await verifyKey(rotated.key)).not.toBeNull();
@@ -232,6 +234,7 @@ describe('rotation', () => {
       .update(apiKeys)
       .set({ graceUntil: new Date(Date.now() - 1000) })
       .where(eq(apiKeys.id, first.id));
+    await invalidateCachedKeyById(first.id);
 
     expect(await verifyKey(first.key)).toBeNull();
     expect(await verifyKey(second.key)).not.toBeNull();
