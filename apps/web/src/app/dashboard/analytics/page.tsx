@@ -20,6 +20,8 @@ export default function AnalyticsDashboardPage() {
   const [newWebhookSecret, setNewWebhookSecret] = useState('');
   const [testStatus, setTestStatus] = useState<Record<string, string>>({});
   const [copiedTraceId, setCopiedTraceId] = useState<string | null>(null);
+  const [logsPage, setLogsPage] = useState(0);
+  const PAGE_SIZE = 20;
 
   // 1. Overview metrics
   const { data: overview, isLoading: overviewLoading, refetch: refetchOverview } = useQuery({
@@ -51,8 +53,8 @@ export default function AnalyticsDashboardPage() {
 
   // 5. Recent Request Logs
   const { data: logsData, isLoading: logsLoading, refetch: refetchLogs } = useQuery({
-    queryKey: ['analytics-logs'],
-    queryFn: () => api.getAnalyticsLogs(20, 0),
+    queryKey: ['analytics-logs', logsPage],
+    queryFn: () => api.getAnalyticsLogs(PAGE_SIZE, logsPage * PAGE_SIZE),
     refetchInterval: 5_000,
   });
 
@@ -600,6 +602,51 @@ export default function AnalyticsDashboardPage() {
             </table>
           </div>
         )}
+
+        {/* Live Logs Pagination */}
+        {logsData && logsData.total > PAGE_SIZE && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '12px 16px',
+              borderTop: '1px solid var(--border)',
+              fontSize: '0.8125rem',
+              flexWrap: 'wrap',
+              gap: '8px',
+            }}
+          >
+            <span className="muted">
+              Showing {logsPage * PAGE_SIZE + 1}–{Math.min((logsPage + 1) * PAGE_SIZE, logsData.total)} of {logsData.total}
+            </span>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                className="secondary-button"
+                onClick={() => setLogsPage((p) => Math.max(0, p - 1))}
+                disabled={logsPage === 0}
+                style={{ padding: '4px 12px', fontSize: '0.75rem', cursor: logsPage === 0 ? 'not-allowed' : 'pointer' }}
+              >
+                Previous
+              </button>
+              <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>
+                Page {logsPage + 1} of {Math.ceil(logsData.total / PAGE_SIZE)}
+              </span>
+              <button
+                className="secondary-button"
+                onClick={() => setLogsPage((p) => p + 1)}
+                disabled={(logsPage + 1) * PAGE_SIZE >= logsData.total}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: '0.75rem',
+                  cursor: (logsPage + 1) * PAGE_SIZE >= logsData.total ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Webhooks & Alerts Modal */}
@@ -835,8 +882,15 @@ function UsageSvgChart({
     const height = 150;
     const padding = 20;
 
-    const points = series.map((item, index) => {
-      const x = padding + (index / Math.max(series.length - 1, 1)) * (width - padding * 2);
+    const firstBucketTime = series[0]?.bucket ? new Date(series[0].bucket).getTime() : 0;
+    const lastBucketTime = series[series.length - 1]?.bucket ? new Date(series[series.length - 1]!.bucket).getTime() : 0;
+    const timeSpan = Math.max(lastBucketTime - firstBucketTime, 1);
+
+    const points = series.map((item) => {
+      const t = new Date(item.bucket).getTime();
+      const x = series.length === 1
+        ? width / 2
+        : padding + ((t - firstBucketTime) / timeSpan) * (width - padding * 2);
       const y = height - (item.requests / maxVal) * (height - 30);
       const errorY = height - (item.errors / maxVal) * (height - 30);
       return { x, y, errorY, item };
@@ -939,8 +993,15 @@ function LatencySvgChart({
     const height = 150;
     const padding = 20;
 
-    const points = series.map((item, index) => {
-      const x = padding + (index / Math.max(series.length - 1, 1)) * (width - padding * 2);
+    const firstBucketTime = series[0]?.bucket ? new Date(series[0].bucket).getTime() : 0;
+    const lastBucketTime = series[series.length - 1]?.bucket ? new Date(series[series.length - 1]!.bucket).getTime() : 0;
+    const timeSpan = Math.max(lastBucketTime - firstBucketTime, 1);
+
+    const points = series.map((item) => {
+      const t = new Date(item.bucket).getTime();
+      const x = series.length === 1
+        ? width / 2
+        : padding + ((t - firstBucketTime) / timeSpan) * (width - padding * 2);
       const yP50 = height - (item.p50 / maxVal) * (height - 30);
       const yP95 = height - (item.p95 / maxVal) * (height - 30);
       const yP99 = height - (item.p99 / maxVal) * (height - 30);

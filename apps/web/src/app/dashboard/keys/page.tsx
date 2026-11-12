@@ -124,7 +124,7 @@ export default function KeysPage() {
         }}
       >
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-          {['all', 'test', 'live', 'dev'].map((env) => (
+          {['all', 'test', 'live'].map((env) => (
             <button
               key={env}
               onClick={() => setFilterEnv(env)}
