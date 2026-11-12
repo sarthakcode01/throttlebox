@@ -8,9 +8,11 @@ import { generateSessionToken, hashSessionToken } from './token.js';
 export const SESSION_COOKIE = 'throttlebox_session';
 export const CSRF_COOKIE = 'throttlebox_csrf';
 
-interface SessionRecord {
+export interface SessionRecord {
   userId: string;
   sessionId: string;
+  orgId?: string | null;
+  role?: string | null;
 }
 
 function redisKey(tokenHash: string): string {
@@ -19,6 +21,8 @@ function redisKey(tokenHash: string): string {
 
 export interface CreateSessionInput {
   userId: string;
+  orgId?: string | null;
+  role?: string | null;
   ip?: string | undefined;
   userAgent?: string | undefined;
 }
@@ -58,10 +62,24 @@ export async function createSession(input: CreateSessionInput): Promise<CreatedS
   }
 
   // Redis is the hot lookup path, with a matching TTL.
-  const record: SessionRecord = { userId: input.userId, sessionId: row.id };
+  // Cache orgId and role in Redis session record to eliminate per-request Postgres queries.
+  const record: SessionRecord = {
+    userId: input.userId,
+    sessionId: row.id,
+    orgId: input.orgId ?? null,
+    role: input.role ?? null,
+  };
   await redis.set(redisKey(tokenHash), JSON.stringify(record), 'EX', config.SESSION_TTL_SECONDS);
 
   return { token, csrfToken, expiresAt };
+}
+
+/**
+ * Updates an active session cache in Redis (e.g. warming cached orgId and role).
+ */
+export async function updateSessionRecord(token: string, record: SessionRecord): Promise<void> {
+  const tokenHash = hashSessionToken(token);
+  await redis.set(redisKey(tokenHash), JSON.stringify(record), 'EX', config.SESSION_TTL_SECONDS);
 }
 
 /**

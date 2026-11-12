@@ -6,7 +6,7 @@ import {
   setQuotaCheckCallback,
   resetQueueForTesting,
 } from '../../src/analytics/ingest.js';
-import { signPayload, dispatchWebhook } from '../../src/analytics/webhooks.js';
+import { signPayload, dispatchWebhook, isValidWebhookUrl } from '../../src/analytics/webhooks.js';
 import { db } from '../../src/db/client.js';
 import { requestLogs } from '../../src/db/schema.js';
 
@@ -59,6 +59,28 @@ describe('Analytics Ingestion Buffer', () => {
 
     expect(quotaCallback).toHaveBeenCalledWith(['org-alert-test']);
   });
+
+  it('restores log batch to queue when database insert fails', async () => {
+    vi.spyOn(db, 'insert').mockReturnValue({
+      values: vi.fn().mockRejectedValue(new Error('Connection lost')),
+    } as unknown as ReturnType<typeof db.insert>);
+
+    recordRequestLog({
+      orgId: 'org-fail-test',
+      method: 'GET',
+      path: '/mock/test/items',
+      statusCode: 200,
+      latencyMs: 15,
+      traceId: 'trace-fail',
+    });
+
+    expect(getQueueStats().queueLength).toBe(1);
+
+    await flushQueue();
+
+    // The log should be restored back into the queue for subsequent retry
+    expect(getQueueStats().queueLength).toBe(1);
+  });
 });
 
 describe('Webhooks & HMAC Signatures', () => {
@@ -100,5 +122,40 @@ describe('Webhooks & HMAC Signatures', () => {
     expect(headers['Content-Type']).toBe('application/json');
 
     vi.unstubAllGlobals();
+  });
+
+  it('rejects SSRF target addresses including private subnets and cloud metadata', () => {
+    // Loopback
+    expect(isValidWebhookUrl('http://localhost:8080/hook').valid).toBe(false);
+    expect(isValidWebhookUrl('http://127.0.0.1/hook').valid).toBe(false);
+    expect(isValidWebhookUrl('http://[::1]/hook').valid).toBe(false);
+
+    // Cloud metadata (AWS / GCP / Azure)
+    expect(isValidWebhookUrl('http://169.254.169.254/latest/meta-data').valid).toBe(false);
+
+    // Private RFC 1918 subnets
+    expect(isValidWebhookUrl('http://10.0.0.1/webhook').valid).toBe(false);
+    expect(isValidWebhookUrl('http://172.16.5.10/webhook').valid).toBe(false);
+    expect(isValidWebhookUrl('http://172.31.255.1/webhook').valid).toBe(false);
+    expect(isValidWebhookUrl('http://192.168.1.1/webhook').valid).toBe(false);
+
+    // Internal domains
+    expect(isValidWebhookUrl('http://service.internal/hook').valid).toBe(false);
+    expect(isValidWebhookUrl('http://app.local/hook').valid).toBe(false);
+
+    // Valid public destinations
+    expect(isValidWebhookUrl('https://api.acme.com/webhooks/receiver').valid).toBe(true);
+    expect(isValidWebhookUrl('https://hooks.slack.com/services/T00/B00/X00').valid).toBe(true);
+  });
+
+  it('blocks dispatch when webhook destination is an SSRF risk', async () => {
+    const result = await dispatchWebhook(
+      { url: 'http://169.254.169.254/metadata', secret: 'whsec_secret' },
+      'test.event',
+      {},
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Blocked SSRF attempt');
   });
 });

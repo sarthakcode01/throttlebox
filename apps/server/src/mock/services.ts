@@ -1,5 +1,8 @@
 import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
+import Redis from 'ioredis';
+import { config } from '../config.js';
+import { redis } from '../db/redis.js';
 import { mockRoutes, mockServices } from '../db/schema.js';
 import type {
   CreateMockRouteRequest,
@@ -28,13 +31,75 @@ export class MockError extends Error {
  * whenever a service's routes change, so an edit is visible immediately.
  */
 const routerCache = new Map<string, ServiceRouter>();
+const ROUTER_INVALIDATE_CHANNEL = 'router:invalidated';
+let routerSubscriberRedis: Redis | null = null;
 
-export function invalidateRouterCache(serviceId?: string): void {
+export function invalidateRouterCache(serviceId?: string, broadcast = true): void {
   if (serviceId) {
     routerCache.delete(serviceId);
-    return;
+  } else {
+    routerCache.clear();
   }
-  routerCache.clear();
+
+  if (broadcast) {
+    try {
+      void redis.publish(
+        ROUTER_INVALIDATE_CHANNEL,
+        JSON.stringify({ serviceId: serviceId ?? null }),
+      ).catch((err) => {
+        console.warn('[mock:pubsub] Failed to publish router invalidation:', err);
+      });
+    } catch (err) {
+      console.warn('[mock:pubsub] Failed to broadcast router invalidation:', err);
+    }
+  }
+}
+
+export function startRouterPubSub(): void {
+  if (routerSubscriberRedis) return;
+
+  try {
+    routerSubscriberRedis = new Redis(config.REDIS_URL, {
+      maxRetriesPerRequest: 3,
+      lazyConnect: false,
+    });
+
+    routerSubscriberRedis.subscribe(ROUTER_INVALIDATE_CHANNEL, (err) => {
+      if (err) {
+        console.error('[mock:pubsub] Failed to subscribe to router invalidations:', err.message);
+      }
+    });
+
+    routerSubscriberRedis.on('message', (channel, message) => {
+      if (channel === ROUTER_INVALIDATE_CHANNEL) {
+        try {
+          const { serviceId } = JSON.parse(message) as { serviceId?: string | null };
+          invalidateRouterCache(serviceId ?? undefined, false);
+        } catch (err) {
+          console.error('[mock:pubsub] Failed to parse message:', err);
+        }
+      }
+    });
+
+    routerSubscriberRedis.on('error', (err) => {
+      console.error('[mock:pubsub] Subscriber Redis error:', err.message);
+    });
+  } catch (err) {
+    console.error('[mock:pubsub] Failed to initialize router subscriber:', err);
+  }
+}
+
+export async function stopRouterPubSub(): Promise<void> {
+  if (routerSubscriberRedis) {
+    try {
+      await routerSubscriberRedis.unsubscribe(ROUTER_INVALIDATE_CHANNEL);
+      routerSubscriberRedis.disconnect();
+    } catch {
+      // ignore on shutdown
+    } finally {
+      routerSubscriberRedis = null;
+    }
+  }
 }
 
 /** Turn a name into a URL-safe slug. */

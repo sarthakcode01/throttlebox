@@ -6,6 +6,7 @@ import { authPlugin } from './auth/middleware.js';
 import { keyAuthPlugin } from './keys/middleware.js';
 import { rateLimitPlugin } from './ratelimit/middleware.js';
 import { startTierPubSub, stopTierPubSub } from './ratelimit/tier.js';
+import { startRouterPubSub, stopRouterPubSub } from './mock/services.js';
 import { startTouchFlusher, stopTouchFlusher } from './keys/touch.js';
 import { registerLenientContentType } from './http/contentType.js';
 import { registerErrorHandler } from './http/errorHandler.js';
@@ -78,6 +79,7 @@ async function main() {
   startTouchFlusher();
   startSessionJanitor();
   startTierPubSub();
+  startRouterPubSub();
   setQuotaCheckCallback(checkOrgQuotas);
   startIngestFlusher();
 
@@ -89,6 +91,7 @@ async function main() {
     await stopTouchFlusher();
     await stopSessionJanitor();
     await stopTierPubSub();
+    await stopRouterPubSub();
     await fastify.close();
     process.exit(0);
   };

@@ -18,7 +18,8 @@ export function resetScriptSha(): void {
 }
 
 export interface CheckRateLimitOptions {
-  keyId: string;
+  keyId?: string;
+  orgId?: string;
   limit: number;
   windowSeconds: number;
   simulatedNowMs?: number;
@@ -28,12 +29,14 @@ export interface CheckRateLimitOptions {
  * Check and record a request in the sliding window.
  *
  * Runs atomically via a Redis Lua script.
+ * If orgId is provided, rate limits are aggregated across the entire organization
+ * (matching plan tier capacities). If only keyId is provided, limits per key.
  * If Redis is temporarily unreachable, logs a warning and fails open
  * to avoid taking down caller traffic during minor blips.
  */
 export async function checkRateLimit(options: CheckRateLimitOptions): Promise<RateLimitResult> {
-  const { keyId, limit, windowSeconds, simulatedNowMs } = options;
-  const bucketKey = `rate:key:${keyId}`;
+  const { keyId, orgId, limit, windowSeconds, simulatedNowMs } = options;
+  const bucketKey = orgId ? `rate:org:${orgId}` : `rate:key:${keyId ?? 'unknown'}`;
   const windowMs = windowSeconds * 1000;
   const memberId = `${Date.now()}:${randomBytes(6).toString('hex')}`;
   const nowMsArg = simulatedNowMs && simulatedNowMs > 0 ? String(simulatedNowMs) : '0';

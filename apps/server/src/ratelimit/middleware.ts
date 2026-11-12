@@ -29,6 +29,7 @@ export const rateLimitPlugin = fp(async (fastify) => {
     const effectiveLimit = Math.floor(plan.requestsPerWindow * plan.burstAllowance);
 
     const result = await checkRateLimit({
+      orgId: auth.orgId,
       keyId: auth.keyId,
       limit: effectiveLimit,
       windowSeconds: plan.windowSeconds,

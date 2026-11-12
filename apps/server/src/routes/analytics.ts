@@ -11,6 +11,7 @@ import type { TimeRange } from '../analytics/types.js';
 import {
   createOrgWebhook,
   deleteOrgWebhook,
+  isValidWebhookUrl,
   listOrgWebhooks,
   testOrgWebhook,
 } from '../analytics/webhooks.js';
@@ -129,6 +130,14 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({
           error: 'validation_error',
           message: parsed.error.issues[0]?.message ?? 'Invalid input',
+        });
+      }
+
+      const urlCheck = isValidWebhookUrl(parsed.data.url);
+      if (!urlCheck.valid) {
+        return reply.code(400).send({
+          error: 'invalid_webhook_url',
+          message: urlCheck.reason ?? 'Webhook URL is not permitted for security reasons',
         });
       }
 

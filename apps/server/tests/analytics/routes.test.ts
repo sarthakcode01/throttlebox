@@ -122,6 +122,13 @@ describe('Analytics API routes', () => {
     expect(listRes.body.webhooks).toHaveLength(1);
     expect(listRes.body.webhooks[0].id).toBe(webhookId);
 
+    // Reject SSRF attempts
+    const ssrfRes = await client
+      .post('/api/analytics/webhooks')
+      .send({ url: 'http://169.254.169.254/metadata' });
+    expect(ssrfRes.status).toBe(400);
+    expect(ssrfRes.body.error).toBe('invalid_webhook_url');
+
     // Delete webhook
     const delRes = await client.delete(`/api/analytics/webhooks/${webhookId}`);
     expect(delRes.status).toBe(200);

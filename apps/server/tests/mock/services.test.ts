@@ -118,6 +118,19 @@ describe('services CRUD', () => {
     const response = await client.delete(`/api/mock/services/${found.id}`);
     expect(response.status).toBe(204);
   });
+
+  it('publishes invalidation to redis pubsub when router cache is cleared', async () => {
+    const redisModule = await import('../../src/db/redis.js');
+    const { vi } = await import('vitest');
+    const publishSpy = vi.spyOn(redisModule.redis, 'publish').mockResolvedValue(1);
+
+    invalidateRouterCache('service-123');
+
+    expect(publishSpy).toHaveBeenCalledWith(
+      'router:invalidated',
+      JSON.stringify({ serviceId: 'service-123' }),
+    );
+  });
 });
 
 /**

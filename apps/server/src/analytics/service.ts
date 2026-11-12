@@ -53,6 +53,43 @@ export async function getUsageSeries(
   const { bucket, since } = parseRangeToInterval(range);
   const sinceStr = since.toISOString();
 
+  // Fast path: use TimescaleDB continuous aggregate view `usage_hourly` for ranges >= 24h
+  if (range !== '1h') {
+    try {
+      const caggRows = await sql<
+        {
+          bucket: Date;
+          requests: number;
+          errors: number;
+          throttled: number;
+        }[]
+      >`
+        SELECT
+          time_bucket(${bucket}::interval, bucket) AS bucket,
+          COALESCE(sum(requests), 0)::int AS requests,
+          COALESCE(sum(errors), 0)::int AS errors,
+          COALESCE(sum(throttled), 0)::int AS throttled
+        FROM usage_hourly
+        WHERE org_id = ${orgId} AND bucket >= ${sinceStr}::timestamptz
+          ${keyId ? sql`AND key_id = ${keyId}` : sql``}
+          ${serviceId ? sql`AND service_id = ${serviceId}` : sql``}
+        GROUP BY 1
+        ORDER BY 1 ASC;
+      `;
+
+      if (caggRows.length > 0) {
+        return caggRows.map((r) => ({
+          bucket: new Date(r.bucket).toISOString(),
+          requests: r.requests,
+          errors: r.errors,
+          throttled: r.throttled,
+        }));
+      }
+    } catch {
+      // Fallback to request_logs if continuous aggregate view is unavailable or unpopulated
+    }
+  }
+
   const rows = await sql<
     {
       bucket: Date;

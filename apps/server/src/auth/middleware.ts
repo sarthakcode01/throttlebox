@@ -6,7 +6,7 @@ import { roleHasPermission } from '@throttlebox/shared';
 import { db } from '../db/client.js';
 import { orgMembers } from '../db/schema.js';
 import { safeEqualString } from '../util/crypto.js';
-import { resolveSession, CSRF_COOKIE, SESSION_COOKIE } from './session.js';
+import { resolveSession, updateSessionRecord, CSRF_COOKIE, SESSION_COOKIE } from './session.js';
 
 export interface AuthContext {
   userId: string;
@@ -44,26 +44,40 @@ export const authPlugin = fp(async (fastify) => {
     const session = await resolveSession(token);
     if (!session) return;
 
-    // Attach the user's default org + role (first membership).
-    //
-    // Ordered by creation so the choice is deterministic. Every user has
-    // exactly one membership today, but an unordered `limit(1)` would leave
-    // the result up to Postgres' plan the moment a second membership exists.
-    const [membership] = await db
-      .select({
-        orgId: orgMembers.orgId,
-        role: orgMembers.role,
-      })
-      .from(orgMembers)
-      .where(eq(orgMembers.userId, session.userId))
-      .orderBy(orgMembers.createdAt)
-      .limit(1);
+    let orgId = session.orgId ?? null;
+    let role = (session.role ?? null) as Role | null;
+
+    // If orgId/role are not yet cached in the Redis session, warm from DB once
+    if (!orgId || !role) {
+      const [membership] = await db
+        .select({
+          orgId: orgMembers.orgId,
+          role: orgMembers.role,
+        })
+        .from(orgMembers)
+        .where(eq(orgMembers.userId, session.userId))
+        .orderBy(orgMembers.createdAt)
+        .limit(1);
+
+      orgId = membership?.orgId ?? null;
+      role = (membership?.role ?? null) as Role | null;
+
+      if (orgId && role) {
+        void updateSessionRecord(token, {
+          ...session,
+          orgId,
+          role,
+        }).catch((err) => {
+          request.log.warn({ err }, 'Failed to warm session record cache');
+        });
+      }
+    }
 
     request.auth = {
       userId: session.userId,
       sessionId: session.sessionId,
-      orgId: membership?.orgId ?? null,
-      role: (membership?.role ?? null) as Role | null,
+      orgId,
+      role,
     };
   });
 

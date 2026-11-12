@@ -132,6 +132,8 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
       const session = await createSession({
         userId: user.id,
+        orgId: org.id,
+        role: 'owner',
         ip: request.ip,
         userAgent: request.headers['user-agent'],
       });
@@ -188,8 +190,18 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       await destroySession(previousToken);
     }
 
+    // Resolve user's default org membership so it is cached inside the Redis session
+    const [membership] = await db
+      .select({ orgId: orgMembers.orgId, role: orgMembers.role })
+      .from(orgMembers)
+      .where(eq(orgMembers.userId, user.id))
+      .orderBy(orgMembers.createdAt)
+      .limit(1);
+
     const session = await createSession({
       userId: user.id,
+      orgId: membership?.orgId ?? null,
+      role: membership?.role ?? null,
       ip: request.ip,
       userAgent: request.headers['user-agent'],
     });

@@ -81,6 +81,12 @@ export async function flushQueue(): Promise<void> {
     }
   } catch (err) {
     console.error('[Telemetry] Failed to flush log batch:', err);
+    // Restore failed batch to the front of the queue to retry on next flush
+    queue.unshift(...batch);
+    if (queue.length > MAX_QUEUE_SIZE) {
+      // Drop oldest overflow if queue exceeds max capacity during extended DB outage
+      queue.splice(MAX_QUEUE_SIZE);
+    }
   } finally {
     isFlushing = false;
     if (queue.length >= BATCH_SIZE) {

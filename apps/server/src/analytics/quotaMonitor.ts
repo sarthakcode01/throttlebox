@@ -48,29 +48,32 @@ export async function checkSingleOrgQuota(orgId: string): Promise<void> {
     return;
   }
 
-  for (const webhook of webhooks) {
-    const last = webhook.lastAlertedThreshold;
+  // Dispatch webhooks in parallel so a slow or hanging destination endpoint does not block others
+  await Promise.allSettled(
+    webhooks.map(async (webhook) => {
+      const last = webhook.lastAlertedThreshold;
 
-    if (currentThreshold !== null && (last === null || currentThreshold > last)) {
-      // Threshold reached or increased (e.g. from 80% to 100%)
-      await dispatchWebhook(webhook, 'quota.threshold_reached', {
-        orgId,
-        threshold: currentThreshold,
-        currentUsage: count,
-        limit,
-        windowSeconds: plan.windowSeconds,
-      });
+      if (currentThreshold !== null && (last === null || currentThreshold > last)) {
+        // Threshold reached or increased (e.g. from 80% to 100%)
+        await dispatchWebhook(webhook, 'quota.threshold_reached', {
+          orgId,
+          threshold: currentThreshold,
+          currentUsage: count,
+          limit,
+          windowSeconds: plan.windowSeconds,
+        });
 
-      await db
-        .update(orgWebhooks)
-        .set({ lastAlertedThreshold: currentThreshold, updatedAt: new Date() })
-        .where(eq(orgWebhooks.id, webhook.id));
-    } else if (currentThreshold === null && last !== null) {
-      // Usage dropped below threshold (new window started)
-      await db
-        .update(orgWebhooks)
-        .set({ lastAlertedThreshold: null, updatedAt: new Date() })
-        .where(eq(orgWebhooks.id, webhook.id));
-    }
-  }
+        await db
+          .update(orgWebhooks)
+          .set({ lastAlertedThreshold: currentThreshold, updatedAt: new Date() })
+          .where(eq(orgWebhooks.id, webhook.id));
+      } else if (currentThreshold === null && last !== null) {
+        // Usage dropped below threshold (new window started)
+        await db
+          .update(orgWebhooks)
+          .set({ lastAlertedThreshold: null, updatedAt: new Date() })
+          .where(eq(orgWebhooks.id, webhook.id));
+      }
+    }),
+  );
 }

@@ -46,6 +46,32 @@ describe('sliding window limiter logic', () => {
     expect(result.retryAfter).toBeUndefined();
   });
 
+  it('aggregates rate limits at org level when orgId is provided', async () => {
+    vi.spyOn(redis, 'script').mockResolvedValue('dummy-sha');
+    const evalSpy = vi.spyOn(redis, 'evalsha').mockResolvedValueOnce([1, 100, 95, 1720000000, 0]);
+
+    resetScriptSha();
+    const result = await checkRateLimit({
+      orgId: 'org-abc',
+      keyId: 'key-xyz',
+      limit: 100,
+      windowSeconds: 3600,
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.remaining).toBe(95);
+    // Verifies that Redis receives the org bucket key `rate:org:org-abc`
+    expect(evalSpy).toHaveBeenCalledWith(
+      'dummy-sha',
+      1,
+      'rate:org:org-abc',
+      '3600000',
+      '100',
+      expect.any(String),
+      '0',
+    );
+  });
+
   it('returns 429 rate_limited result when limit is exceeded', async () => {
     vi.spyOn(redis, 'script').mockResolvedValue('dummy-sha');
     vi.spyOn(redis, 'evalsha').mockResolvedValueOnce([0, 100, 0, 1720000042, 42]);

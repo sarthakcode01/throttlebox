@@ -185,34 +185,57 @@ async function renderMockResponse(
 
 export const mockRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('onResponse', async (request, reply) => {
-    const auth = request.keyAuth;
-    if (!auth) return;
-
-    const latencyMs = Math.round(reply.elapsedTime);
-    const rateLimited = reply.statusCode === 429;
-    const traceId = (request.id as string) || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const reqExt = request as unknown as { mockServiceId?: string };
-    let serviceId = reqExt.mockServiceId ?? null;
-    if (!serviceId) {
-      const p = mockParams(request);
-      if (p.serviceSlug) {
-        const r = await getServiceRouter(auth.orgId, p.serviceSlug);
-        serviceId = r?.serviceId ?? null;
+    try {
+      const auth = request.keyAuth;
+      if (!auth) {
+        if (reply.statusCode === 401) {
+          request.log.warn(
+            {
+              method: request.method,
+              url: request.raw.url,
+              statusCode: reply.statusCode,
+              ip: request.ip,
+            },
+            'Unauthenticated mock request attempt (401)',
+          );
+        }
+        return;
       }
-    }
-    const rawPath = request.raw.url?.split('?')[0] ?? request.url;
 
-    recordRequestLog({
-      keyId: auth.keyId,
-      orgId: auth.orgId,
-      serviceId,
-      method: request.method.toUpperCase(),
-      path: rawPath,
-      statusCode: reply.statusCode,
-      latencyMs,
-      rateLimited,
-      traceId,
-    });
+      const latencyMs = Math.round(reply.elapsedTime);
+      const rateLimited = reply.statusCode === 429;
+      const traceId = (request.id as string) || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const reqExt = request as unknown as { mockServiceId?: string };
+      let serviceId = reqExt.mockServiceId ?? null;
+
+      if (!serviceId) {
+        try {
+          const p = mockParams(request);
+          if (p.serviceSlug) {
+            const r = await getServiceRouter(auth.orgId, p.serviceSlug);
+            serviceId = r?.serviceId ?? null;
+          }
+        } catch (err) {
+          request.log.warn({ err }, 'Failed to resolve serviceId for telemetry');
+        }
+      }
+
+      const rawPath = request.raw.url?.split('?')[0] ?? request.url;
+
+      recordRequestLog({
+        keyId: auth.keyId,
+        orgId: auth.orgId,
+        serviceId,
+        method: request.method.toUpperCase(),
+        path: rawPath,
+        statusCode: reply.statusCode,
+        latencyMs,
+        rateLimited,
+        traceId,
+      });
+    } catch (err) {
+      request.log.warn({ err }, 'Unexpected error in onResponse telemetry hook');
+    }
   });
 
   const handler = async (request: FastifyRequest, reply: FastifyReply) => {
