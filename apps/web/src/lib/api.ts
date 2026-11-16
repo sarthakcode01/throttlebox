@@ -21,6 +21,10 @@ import type {
   RequestLogSummary,
   WebhookConfig,
   CreateWebhookRequest,
+  ChaosRuleConfig,
+  UpdateChaosRuleRequest,
+  ChaosBenchmarkRequest,
+  ChaosBenchmarkResult,
 } from '@throttlebox/shared';
 
 /**
@@ -226,5 +230,36 @@ export const api = {
   testWebhook: (id: string) =>
     request<{ success: boolean; statusCode?: number; error?: string }>(`/api/analytics/webhooks/${id}/test`, {
       method: 'POST',
+    }),
+
+  // Chaos Engineering (Phase 6)
+  getChaosRules: () =>
+    request<{ defaultRule: ChaosRuleConfig; rules: ChaosRuleConfig[] }>('/api/chaos'),
+
+  updateChaosRule: (body: UpdateChaosRuleRequest) =>
+    request<{ rule: ChaosRuleConfig }>('/api/chaos', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+
+  resetChaosRules: () =>
+    request<{ success: boolean; message: string }>('/api/chaos/reset', {
+      method: 'POST',
+    }),
+
+  deleteChaosRule: (params?: { serviceId?: string; keyId?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.serviceId) query.set('serviceId', params.serviceId);
+    if (params?.keyId) query.set('keyId', params.keyId);
+    const qs = query.toString();
+    return request<{ success: boolean; message: string }>(`/api/chaos${qs ? `?${qs}` : ''}`, {
+      method: 'DELETE',
+    });
+  },
+
+  runChaosBenchmark: (body: ChaosBenchmarkRequest) =>
+    request<ChaosBenchmarkResult>('/api/chaos/benchmark', {
+      method: 'POST',
+      body: JSON.stringify(body),
     }),
 };

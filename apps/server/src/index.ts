@@ -5,8 +5,10 @@ import { config, isProduction } from './config.js';
 import { authPlugin } from './auth/middleware.js';
 import { keyAuthPlugin } from './keys/middleware.js';
 import { rateLimitPlugin } from './ratelimit/middleware.js';
+import { chaosPlugin } from './chaos/middleware.js';
 import { startTierPubSub, stopTierPubSub } from './ratelimit/tier.js';
 import { startRouterPubSub, stopRouterPubSub } from './mock/services.js';
+import { startChaosPubSub, stopChaosPubSub } from './chaos/cache.js';
 import { startTouchFlusher, stopTouchFlusher } from './keys/touch.js';
 import { registerLenientContentType } from './http/contentType.js';
 import { registerErrorHandler } from './http/errorHandler.js';
@@ -20,6 +22,7 @@ import { openApiRoutes } from './routes/openapi.js';
 import { serviceRoutes } from './routes/services.js';
 import { orgRoutes } from './routes/org.js';
 import { analyticsRoutes } from './routes/analytics.js';
+import { chaosRoutes } from './routes/chaos.js';
 import { startIngestFlusher, stopIngestFlusher, setQuotaCheckCallback } from './analytics/ingest.js';
 import { checkOrgQuotas } from './analytics/quotaMonitor.js';
 
@@ -50,6 +53,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await fastify.register(authPlugin);
   await fastify.register(keyAuthPlugin);
   await fastify.register(rateLimitPlugin);
+  await fastify.register(chaosPlugin);
 
   registerLenientContentType(fastify);
   registerErrorHandler(fastify);
@@ -64,6 +68,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await fastify.register(serviceRoutes, { prefix: '/api' });
   await fastify.register(orgRoutes, { prefix: '/api' });
   await fastify.register(analyticsRoutes, { prefix: '/api' });
+  await fastify.register(chaosRoutes, { prefix: '/api' });
   await fastify.register(mockPreviewRoutes, { prefix: '/api' });
 
   // The public mock API and its OpenAPI document live outside /api — they
@@ -80,6 +85,7 @@ async function main() {
   startSessionJanitor();
   startTierPubSub();
   startRouterPubSub();
+  startChaosPubSub();
   setQuotaCheckCallback(checkOrgQuotas);
   startIngestFlusher();
 
@@ -92,6 +98,7 @@ async function main() {
     await stopSessionJanitor();
     await stopTierPubSub();
     await stopRouterPubSub();
+    await stopChaosPubSub();
     await fastify.close();
     process.exit(0);
   };

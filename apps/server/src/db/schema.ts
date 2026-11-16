@@ -363,6 +363,43 @@ export const orgWebhooks = pgTable(
   (table) => [index('org_webhooks_org_idx').on(table.orgId)],
 );
 
+export const chaosRules = pgTable(
+  'chaos_rules',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    serviceId: uuid('service_id').references(() => mockServices.id, { onDelete: 'cascade' }),
+    keyId: uuid('key_id').references(() => apiKeys.id, { onDelete: 'cascade' }),
+    isEnabled: boolean('is_enabled').notNull().default(false),
+    latency: jsonb('latency').notNull().default({
+      enabled: false,
+      distribution: 'normal',
+      meanMs: 200,
+      stddevMs: 50,
+      minMs: 0,
+      maxMs: 30000,
+    }),
+    errors: jsonb('errors').notNull().default({
+      enabled: false,
+      rate5xx: 0.0,
+      rate429: 0.0,
+      statusCodes: [500, 502, 503, 504],
+    }),
+    partition: jsonb('partition').notNull().default({
+      enabled: false,
+      dropRate: 0.0,
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('chaos_rules_org_idx').on(table.orgId),
+    uniqueIndex('chaos_rules_scope_idx').on(table.orgId, table.serviceId, table.keyId),
+  ],
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
   memberships: many(orgMembers),
@@ -418,6 +455,12 @@ export const orgWebhooksRelations = relations(orgWebhooks, ({ one }) => ({
   org: one(orgs, { fields: [orgWebhooks.orgId], references: [orgs.id] }),
 }));
 
+export const chaosRulesRelations = relations(chaosRules, ({ one }) => ({
+  org: one(orgs, { fields: [chaosRules.orgId], references: [orgs.id] }),
+  service: one(mockServices, { fields: [chaosRules.serviceId], references: [mockServices.id] }),
+  key: one(apiKeys, { fields: [chaosRules.keyId], references: [apiKeys.id] }),
+}));
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
@@ -437,3 +480,5 @@ export type RequestLog = typeof requestLogs.$inferSelect;
 export type NewRequestLog = typeof requestLogs.$inferInsert;
 export type OrgWebhook = typeof orgWebhooks.$inferSelect;
 export type NewOrgWebhook = typeof orgWebhooks.$inferInsert;
+export type ChaosRule = typeof chaosRules.$inferSelect;
+export type NewChaosRule = typeof chaosRules.$inferInsert;

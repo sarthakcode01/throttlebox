@@ -327,3 +327,87 @@ export interface CreateWebhookRequest {
   url: string;
   secret?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Chaos Engineering Controls (Phase 6)
+// ---------------------------------------------------------------------------
+
+export type ChaosLatencyDistribution = 'fixed' | 'normal' | 'uniform';
+
+export interface ChaosLatencyConfig {
+  enabled: boolean;
+  distribution: ChaosLatencyDistribution;
+  /** Mean delay in milliseconds (or fixed delay). */
+  meanMs: number;
+  /** Standard deviation in milliseconds (for normal distribution). */
+  stddevMs: number;
+  /** Minimum floor in milliseconds. */
+  minMs?: number;
+  /** Maximum ceiling in milliseconds. */
+  maxMs?: number;
+}
+
+export interface ChaosErrorConfig {
+  enabled: boolean;
+  /** Probability of 5xx errors between 0.00 and 1.00 (e.g. 0.05 = 5%). */
+  rate5xx: number;
+  /** Probability of simulated 429 errors between 0.00 and 1.00. */
+  rate429: number;
+  /** Specific 5xx status codes to cycle through (e.g. [500, 502, 503, 504]). */
+  statusCodes: number[];
+  /** Optional custom error message/payload. */
+  customMessage?: string;
+}
+
+export interface ChaosPartitionConfig {
+  enabled: boolean;
+  /** Probability of dropping the TCP connection (0.00 to 1.00). */
+  dropRate: number;
+}
+
+export interface ChaosRuleConfig {
+  id: string;
+  orgId: string;
+  /** Optional key scoping. Null = applies to all keys in the org. */
+  keyId?: string | null;
+  /** Optional service scoping. Null = applies to all services in the org. */
+  serviceId?: string | null;
+  isEnabled: boolean;
+  latency: ChaosLatencyConfig;
+  errors: ChaosErrorConfig;
+  partition: ChaosPartitionConfig;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpdateChaosRuleRequest {
+  serviceId?: string | null;
+  keyId?: string | null;
+  isEnabled: boolean;
+  latency: ChaosLatencyConfig;
+  errors: ChaosErrorConfig;
+  partition: ChaosPartitionConfig;
+}
+
+export interface ChaosBenchmarkRequest {
+  serviceSlug: string;
+  requestCount?: number; // default: 100, max: 200
+  concurrency?: number; // default: 10, max: 25
+}
+
+export interface ChaosBenchmarkResult {
+  totalRequests: number;
+  successful: number;
+  errors5xx: number;
+  throttled429: number;
+  dropped: number;
+  meanLatencyMs: number;
+  p50LatencyMs: number;
+  p95LatencyMs: number;
+  p99LatencyMs: number;
+  histogram: {
+    bracket: string;
+    count: number;
+  }[];
+}
+

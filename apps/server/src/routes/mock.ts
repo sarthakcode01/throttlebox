@@ -256,7 +256,12 @@ export const mockRoutes: FastifyPluginAsync = async (fastify) => {
     fastify.route({
       method,
       url: MOCK_URL,
-      preHandler: [fastify.requireKeyAuth, fastify.requireScope('mock:read'), fastify.rateLimitMock],
+      preHandler: [
+        fastify.requireKeyAuth,
+        fastify.requireScope('mock:read'),
+        fastify.rateLimitMock,
+        fastify.chaosEngine,
+      ],
       handler,
     });
   }
@@ -265,7 +270,12 @@ export const mockRoutes: FastifyPluginAsync = async (fastify) => {
     fastify.route({
       method,
       url: MOCK_URL,
-      preHandler: [fastify.requireKeyAuth, fastify.requireScope('mock:write'), fastify.rateLimitMock],
+      preHandler: [
+        fastify.requireKeyAuth,
+        fastify.requireScope('mock:write'),
+        fastify.rateLimitMock,
+        fastify.chaosEngine,
+      ],
       handler,
     });
   }

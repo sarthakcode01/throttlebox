@@ -109,14 +109,15 @@ flowchart LR
 
 ## Track B — Differentiators (adds ~12 days)
 
-### Phase 6 — Chaos Engineering Controls · Days 28–32 🎯
+### Phase 6 — Chaos Engineering Controls · Days 28–32 🎯 ✅
 
 |                   |                                                                                                                                                                                                   |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Deliverables**  | Per-key chaos config in Redis, middleware injecting sampled latency / 5xx / 429 / socket drops, dashboard sliders (5s read-through cache), self-demonstrating resilience test page with histogram |
+| **Deliverables**  | Per-key/org chaos config in Redis, middleware injecting sampled latency / 5xx / 429 / socket drops, dashboard sliders (5s read-through cache), self-demonstrating resilience test page with histogram |
 | **Deps**          | Phase 4 pipeline (inserted before the route handler)                                                                                                                                              |
 | **Exit criteria** | 5% error rate → ~5 failures per 100 requests, correct distribution                                                                                                                                |
 | **Risk**          | Medium — the `weighted_responses` column in Phase 3 exists for this                                                                                                                               |
+| **Done**          | 2026-11-14 — Box-Muller Gaussian latency jitter, true TCP socket termination (`request.raw.destroy()`), Redis pub/sub invalidation, Fastify middleware, and interactive resilience test studio.    |
 
 ### Phase 7 — Time-Travel Playground · Days 33–39 🎯
 
@@ -145,8 +146,8 @@ flowchart LR
 - [x] P2 API Keys
 - [x] P3 Mock Engine
 - [x] P4 Rate Limiting ⭐
-- [ ] P5 Analytics ⭐
-- [ ] P6 Chaos 🎯
+- [x] P5 Analytics ⭐
+- [x] P6 Chaos 🎯
 - [ ] P7 Time Travel 🎯
 - [ ] P8 Testing & CI
 - [ ] P9 Deployment
