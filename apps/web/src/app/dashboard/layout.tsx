@@ -49,11 +49,15 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     queryFn: api.getOrgPlan,
     enabled: Boolean(sessionData?.org?.id),
     retry: false,
+    // Keeps the usage bar current while the dashboard is open.
+    refetchInterval: 15_000,
   });
 
+  // A failed logout (network error, expired CSRF token) still ends the
+  // session client-side, so the user is never stuck on a dead dashboard.
   const logoutMutation = useMutation({
     mutationFn: api.logout,
-    onSuccess: async () => {
+    onSettled: async () => {
       queryClient.clear();
       router.push('/login');
     },
@@ -144,8 +148,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           </div>
           <h2 style={{ margin: '0 0 8px' }}>Workspace Unavailable</h2>
           <p className="muted" style={{ margin: '0 0 20px', fontSize: '0.9rem' }}>
-            Could not communicate with the Throttlebox API server. Verify the server is running on
-            port 3001.
+            Could not communicate with the Throttlebox API server at{' '}
+            <code>{process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001'}</code>.
           </p>
           <button
             onClick={() => queryClient.invalidateQueries({ queryKey: ['me'] })}
@@ -165,6 +169,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const requestsPerWindow = planData?.plan?.requestsPerWindow ?? (isPro ? 5000 : 100);
   const burstAllowance = planData?.plan?.burstAllowance ?? (isPro ? 1.2 : 1.0);
   const maxCapacity = Math.round(requestsPerWindow * burstAllowance);
+
+  // Real consumption of the current window, from the limiter itself.
+  const used = planData?.usage?.used ?? null;
+  const usageLimit = planData?.usage?.limit ?? maxCapacity;
+  const usagePercent =
+    used === null || usageLimit <= 0 ? 0 : Math.min(100, Math.round((used / usageLimit) * 100));
 
   const navItems: NavItem[] = [
     {
@@ -316,16 +326,16 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         {/* Quota Mini Progress Box */}
         <div className="sidebar-quota-box">
           <div className="sidebar-quota-title">
-            <span style={{ color: 'var(--muted)' }}>Window Capacity</span>
+            <span style={{ color: 'var(--muted)' }}>Window Usage</span>
             <span style={{ color: isPro ? 'var(--success)' : 'var(--accent)' }}>
-              {requestsPerWindow.toLocaleString()} req/hr
+              {used === null ? '—' : used.toLocaleString()} / {usageLimit.toLocaleString()}
             </span>
           </div>
           <div className="sidebar-quota-bar">
             <div
               className="sidebar-quota-fill"
               style={{
-                width: isPro ? '85%' : '35%',
+                width: `${usagePercent}%`,
                 background: isPro
                   ? 'linear-gradient(90deg, #5b8cff 0%, #3ecf8e 100%)'
                   : 'var(--accent)',
@@ -338,7 +348,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               href="/dashboard/rate-limits"
               style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}
             >
-              {isPro ? 'Manage' : 'Upgrade &rarr;'}
+              {isPro ? 'Manage' : 'Upgrade →'}
             </Link>
           </div>
         </div>
@@ -395,7 +405,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           <div className="topbar-actions">
             <div className="status-indicator">
               <div className="status-dot" />
-              <span>Redis &amp; Fastify Online</span>
+              <span>API connected</span>
             </div>
             <Link
               href="/dashboard/docs"

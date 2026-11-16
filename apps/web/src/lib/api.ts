@@ -14,6 +14,8 @@ import type {
   RotateKeyRequest,
   Plan,
   PlanConfig,
+  OrgPlanResponse,
+  CreatedWebhookConfig,
   AnalyticsOverview,
   AnalyticsUsageBucket,
   AnalyticsLatencyBucket,
@@ -110,6 +112,9 @@ export const api = {
 
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
 
+  /** Ends every session the user has, on every device. */
+  logoutAll: () => request<{ ok: boolean }>('/api/auth/logout-all', { method: 'POST' }),
+
   me: () => request<MeResponse>('/api/me'),
 
   // ---- API keys --------------------------------------------------------
@@ -186,7 +191,7 @@ export const api = {
     }),
   // ---- Organization & Tiers --------------------------------------------
 
-  getOrgPlan: () => request<{ plan: PlanConfig }>('/api/org/plan'),
+  getOrgPlan: () => request<OrgPlanResponse>('/api/org/plan'),
 
   updateOrgPlan: (plan: Plan) =>
     request<{ ok: boolean; plan: PlanConfig }>('/api/org/plan', {
@@ -207,19 +212,23 @@ export const api = {
   },
 
   getAnalyticsLatency: (range = '24h') =>
-    request<{ series: AnalyticsLatencyBucket[] }>(`/api/analytics/latency?range=${encodeURIComponent(range)}`),
+    request<{ series: AnalyticsLatencyBucket[] }>(
+      `/api/analytics/latency?range=${encodeURIComponent(range)}`,
+    ),
 
   getAnalyticsErrors: (range = '24h') =>
     request<AnalyticsErrorsBreakdown>(`/api/analytics/errors?range=${encodeURIComponent(range)}`),
 
   getAnalyticsLogs: (limit = 50, offset = 0) =>
-    request<{ logs: RequestLogSummary[]; total: number }>(`/api/analytics/logs?limit=${limit}&offset=${offset}`),
+    request<{ logs: RequestLogSummary[]; total: number }>(
+      `/api/analytics/logs?limit=${limit}&offset=${offset}`,
+    ),
 
-  getWebhooks: () =>
-    request<{ webhooks: WebhookConfig[] }>('/api/analytics/webhooks'),
+  getWebhooks: () => request<{ webhooks: WebhookConfig[] }>('/api/analytics/webhooks'),
 
+  /** Returns the signing secret. This is the only time it is ever visible. */
   createWebhook: (body: CreateWebhookRequest) =>
-    request<WebhookConfig>('/api/analytics/webhooks', {
+    request<CreatedWebhookConfig>('/api/analytics/webhooks', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
@@ -228,9 +237,12 @@ export const api = {
     request<{ success: boolean }>(`/api/analytics/webhooks/${id}`, { method: 'DELETE' }),
 
   testWebhook: (id: string) =>
-    request<{ success: boolean; statusCode?: number; error?: string }>(`/api/analytics/webhooks/${id}/test`, {
-      method: 'POST',
-    }),
+    request<{ success: boolean; statusCode?: number; error?: string }>(
+      `/api/analytics/webhooks/${id}/test`,
+      {
+        method: 'POST',
+      },
+    ),
 
   // Chaos Engineering (Phase 6)
   getChaosRules: () =>

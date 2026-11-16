@@ -43,7 +43,9 @@ export default function RateLimitsPage() {
     }
   };
 
-  const testCurl = `for i in {1..120}; do curl -s -i -H "Authorization: Bearer <your-key>" http://localhost:3001/mock/ecommerce/products | grep -E "HTTP|X-RateLimit|Retry-After"; done`;
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+  const windowSeconds = plan?.windowSeconds ?? 3600;
+  const testCurl = `for i in {1..120}; do curl -s -i -H "Authorization: Bearer <your-key>" ${apiUrl}/mock/ecommerce/products | grep -E "HTTP|X-RateLimit|Retry-After"; done`;
 
   return (
     <div>
@@ -52,8 +54,8 @@ export default function RateLimitsPage() {
         <div>
           <h1 className="dashboard-title">Rate Limits &amp; Tier Management</h1>
           <p className="dashboard-subtitle">
-            Atomic Redis Lua sliding-window quotas with microsecond precision, automated burst
-            allowances, and zero-downtime cluster synchronization.
+            Atomic Redis Lua sliding-window quotas with millisecond precision, a per-plan burst
+            allowance, and plan changes that apply without a restart.
           </p>
         </div>
 
@@ -117,7 +119,7 @@ export default function RateLimitsPage() {
                 {requestsPerWindow.toLocaleString()}
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
-                requests / 3600 seconds
+                requests / {windowSeconds.toLocaleString()} seconds
               </div>
             </div>
 
@@ -236,9 +238,9 @@ export default function RateLimitsPage() {
           </div>
           <h3 style={{ fontSize: '1.05rem', margin: '0 0 8px' }}>RFC 6585 Rate Headers</h3>
           <p className="muted" style={{ fontSize: '0.875rem', margin: 0, lineHeight: 1.6 }}>
-            Throttlebox populates <code>X-RateLimit-Limit</code>, <code>X-RateLimit-Remaining</code>
-            , <code>X-RateLimit-Reset</code>, and <code>X-RateLimit-Policy</code> on every response.
-            Throttled requests return a standard <code>429</code> with <code>Retry-After</code>.
+            Throttlebox sets <code>X-RateLimit-Limit</code>, <code>X-RateLimit-Remaining</code> and{' '}
+            <code>X-RateLimit-Reset</code> on every mock API response. Throttled requests return a
+            standard <code>429</code> with <code>Retry-After</code>.
           </p>
         </div>
 
@@ -258,8 +260,8 @@ export default function RateLimitsPage() {
           </div>
           <h3 style={{ fontSize: '1.05rem', margin: '0 0 8px' }}>Automated Burst Allowance</h3>
           <p className="muted" style={{ fontSize: '0.875rem', margin: 0, lineHeight: 1.6 }}>
-            Pro workspaces enjoy a 20% burst allowance (6,000 requests) to absorb concurrent surges
-            from automated CI pipelines without failing tests due to transient spikes.
+            Pro workspaces get a 1.2× allowance on top of the base quota — 6,000 requests per window
+            instead of 5,000 — shared by every key in the organization.
           </p>
         </div>
       </div>

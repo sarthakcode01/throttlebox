@@ -284,11 +284,13 @@ export default function HomePage() {
             }}
           >
             <span style={{ color: 'var(--accent)' }}>$</span>
-            <code>curl -H &quot;Authorization: Bearer tb_live_...&quot; /v1/mock/products</code>
+            <code>
+              curl -H &quot;Authorization: Bearer sk_live_...&quot; /mock/ecommerce/products
+            </code>
             <button
               onClick={() =>
                 handleCopy(
-                  'curl -H "Authorization: Bearer tb_live_free_demo_key" https://api.throttlebox.dev/v1/mock/products',
+                  'curl -H "Authorization: Bearer sk_live_<your-key>" https://api.throttlebox.dev/mock/ecommerce/products',
                   'quick-curl',
                 )
               }
@@ -358,13 +360,11 @@ export default function HomePage() {
                 <span className="t-cmd">curl</span> <span className="t-flag">-i</span>{' '}
                 <span className="t-flag">-X</span> GET \<br />
                 {'  '}
-                <span className="t-url">
-                  https://api.throttlebox.dev/v1/mock/services/srv_store/products
-                </span>{' '}
-                \<br />
+                <span className="t-url">https://api.throttlebox.dev/mock/ecommerce/products</span> \
+                <br />
                 {'  '}-H{' '}
                 <span className="t-header">
-                  &quot;Authorization: Bearer tb_live_e4c9a781...&quot;
+                  &quot;Authorization: Bearer sk_live_9Kd2mQxR7tYb_...&quot;
                 </span>{' '}
                 \<br />
                 {'  '}-H <span className="t-header">&quot;Accept: application/json&quot;</span>
@@ -771,8 +771,8 @@ export default function HomePage() {
                 </div>
                 <h3 className="bento-title">Cryptographic Key Isolation</h3>
                 <p className="bento-desc">
-                  API keys carry a routing prefix (<code>tb_live_...</code>), a public identifier,
-                  and 256 bits of CSPRNG entropy. Hashes are computed with server-side peppers,
+                  API keys carry a routing prefix (<code>sk_live_...</code>), a public identifier,
+                  and a 190-bit CSPRNG secret. Hashes are computed with server-side peppers,
                   preventing rainbow table attacks even if database backups are exposed.
                 </p>
               </div>

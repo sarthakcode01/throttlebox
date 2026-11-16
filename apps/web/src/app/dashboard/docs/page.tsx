@@ -7,6 +7,16 @@ import { api } from '@/lib/api';
 
 type DocsViewMode = 'stoplight' | 'explorer' | 'raw';
 
+/**
+ * Stoplight Elements is loaded from a CDN, so it is pinned to an exact
+ * version and checked with Subresource Integrity. Unpinned, any new upstream
+ * release — or a compromised one — would run in the dashboard origin with the
+ * signed-in user's session.
+ */
+const STOPLIGHT_BASE = 'https://unpkg.com/@stoplight/elements@9.0.29';
+const STOPLIGHT_JS_SRI = 'sha384-enyjBaVmV00WFIo0D7AIVgtZ/4x0idVNWHotG8WUpvQo9HXgMSGAAW2YEOpiJTpP';
+const STOPLIGHT_CSS_SRI = 'sha384-iVQBHadsD+eV0M5+ubRCEVXrXEBj+BqcuwjUwPoVJc0Pb1fmrhYSAhL+BFProHdV';
+
 export default function DashboardDocsPage() {
   const [selectedSlug, setSelectedSlug] = useState<string>('ecommerce');
   const [viewMode, setViewMode] = useState<DocsViewMode>('explorer');
@@ -81,7 +91,9 @@ export default function DashboardDocsPage() {
       const link = document.createElement('link');
       link.id = cssId;
       link.rel = 'stylesheet';
-      link.href = 'https://unpkg.com/@stoplight/elements/styles.min.css';
+      link.href = `${STOPLIGHT_BASE}/styles.min.css`;
+      link.integrity = STOPLIGHT_CSS_SRI;
+      link.crossOrigin = 'anonymous';
       document.head.appendChild(link);
     }
 
@@ -90,7 +102,9 @@ export default function DashboardDocsPage() {
     if (!document.getElementById(scriptId)) {
       const script = document.createElement('script');
       script.id = scriptId;
-      script.src = 'https://unpkg.com/@stoplight/elements/web-components.min.js';
+      script.src = `${STOPLIGHT_BASE}/web-components.min.js`;
+      script.integrity = STOPLIGHT_JS_SRI;
+      script.crossOrigin = 'anonymous';
       script.async = true;
       document.body.appendChild(script);
     }
@@ -112,7 +126,9 @@ export default function DashboardDocsPage() {
     a.href = url;
     a.download = `${selectedSlug}-openapi.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    // Revoking straight after click() can cancel the download in some
+    // browsers; give it a moment to start.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   // Helper for Native Route Explorer
@@ -295,7 +311,10 @@ export default function DashboardDocsPage() {
             </div>
           ) : (
             routeEntries.map((route, i) => {
-              const fullCurl = `curl -i -H "Authorization: Bearer <your-key>" ${apiUrl}/mock/${selectedSlug}${route.path}`;
+              // Path parameters are `{name}` in the document; fill in a
+              // sample value so the copied command actually runs.
+              const samplePath = route.path.replace(/\{([^}]+)\}/g, '1');
+              const fullCurl = `curl -i -H "Authorization: Bearer <your-key>" ${apiUrl}/mock/${selectedSlug}${samplePath}`;
               const methodClass = `method-${route.method.toLowerCase()}`;
 
               return (

@@ -20,6 +20,14 @@ export default function DashboardOverviewPage() {
   });
 
   const keys = keysData?.keys ?? [];
+  // Revoked, expired and superseded keys are listed on the keys page but
+  // are not "active".
+  const activeKeys = keys.filter(
+    (key) =>
+      key.status === 'active' &&
+      !(key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now()) &&
+      !(key.graceUntil && new Date(key.graceUntil).getTime() <= Date.now()),
+  );
   const services = servicesData?.services ?? [];
   const totalRoutes = services.reduce((acc, s) => acc + s.routeCount, 0);
 
@@ -95,7 +103,7 @@ export default function DashboardOverviewPage() {
               </svg>
             </div>
           </div>
-          <div className="metric-value">{keys.length}</div>
+          <div className="metric-value">{activeKeys.length}</div>
           <div className="metric-sub">
             <Link href="/dashboard/keys" style={{ color: 'var(--accent)' }}>
               Manage keys &rarr;
@@ -303,7 +311,7 @@ export default function DashboardOverviewPage() {
       {services.length === 0 ? (
         <div className="card text-center" style={{ padding: '40px 24px' }}>
           <p className="muted" style={{ margin: '0 0 16px' }}>
-            No mock services created yet. Create a service or import an OpenAPI spec to get started.
+            No mock services created yet. Create a service to get started.
           </p>
           <Link
             href="/dashboard/services"

@@ -9,7 +9,7 @@ import type {
   ChaosPartitionConfig,
   ChaosRuleConfig,
 } from '@throttlebox/shared';
-import { api } from '@/lib/api';
+import { ApiError, api } from '@/lib/api';
 
 export default function ChaosStudioPage() {
   const queryClient = useQueryClient();
@@ -38,7 +38,6 @@ export default function ChaosStudioPage() {
     rate5xx: 0.05,
     rate429: 0.0,
     statusCodes: [500, 502, 503, 504],
-    customMessage: '',
   });
   const [partition, setPartition] = useState<ChaosPartitionConfig>({
     enabled: false,
@@ -61,6 +60,9 @@ export default function ChaosStudioPage() {
   const [benchmarkCount, setBenchmarkCount] = useState(100);
   const [benchmarkResult, setBenchmarkResult] = useState<ChaosBenchmarkResult | null>(null);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const describeError = (err: unknown) =>
+    err instanceof ApiError ? err.message : 'The request failed. Is the API reachable?';
 
   // Save Mutation
   const saveMutation = useMutation({
@@ -72,13 +74,18 @@ export default function ChaosStudioPage() {
         partition,
       }),
     onSuccess: (data) => {
-      queryClient.setQueryData(['chaos-rules'], (old: { defaultRule: ChaosRuleConfig; rules: ChaosRuleConfig[] } | undefined) => {
-        if (!old) return old;
-        return { ...old, defaultRule: data.rule };
-      });
-      setSaveSuccessMsg('Chaos rules published to Redis cluster');
+      queryClient.setQueryData(
+        ['chaos-rules'],
+        (old: { defaultRule: ChaosRuleConfig; rules: ChaosRuleConfig[] } | undefined) => {
+          if (!old) return old;
+          return { ...old, defaultRule: data.rule };
+        },
+      );
+      setSaveError(null);
+      setSaveSuccessMsg('Chaos rules published');
       setTimeout(() => setSaveSuccessMsg(null), 3500);
     },
+    onError: (err) => setSaveError(describeError(err)),
   });
 
   // Reset Mutation
@@ -90,21 +97,26 @@ export default function ChaosStudioPage() {
       setErrors({ enabled: false, rate5xx: 0.0, rate429: 0.0, statusCodes: [500, 502, 503, 504] });
       setPartition({ enabled: false, dropRate: 0.0 });
       queryClient.invalidateQueries({ queryKey: ['chaos-rules'] });
+      setSaveError(null);
       setSaveSuccessMsg('All chaos controls disabled');
       setTimeout(() => setSaveSuccessMsg(null), 3500);
     },
+    onError: (err) => setSaveError(describeError(err)),
   });
 
   // Benchmark Runner Mutation
   const benchmarkMutation = useMutation({
     mutationFn: () =>
       api.runChaosBenchmark({
-        serviceSlug: 'flagship',
+        // The seeded flagship service's slug.
+        serviceSlug: 'ecommerce',
         requestCount: benchmarkCount,
       }),
     onSuccess: (res) => {
+      setSaveError(null);
       setBenchmarkResult(res);
     },
+    onError: (err) => setSaveError(describeError(err)),
   });
 
   const handleToggleStatusCode = (code: number) => {
@@ -129,7 +141,15 @@ export default function ChaosStudioPage() {
   }
 
   return (
-    <div style={{ maxWidth: '1100px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '28px' }}>
+    <div
+      style={{
+        maxWidth: '1100px',
+        margin: '0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '28px',
+      }}
+    >
       {/* Top Banner */}
       <div
         style={{
@@ -142,7 +162,9 @@ export default function ChaosStudioPage() {
       >
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <h2 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 800 }}>Chaos Engineering Studio</h2>
+            <h2 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 800 }}>
+              Chaos Engineering Studio
+            </h2>
             <span
               className="badge"
               style={{
@@ -156,8 +178,12 @@ export default function ChaosStudioPage() {
               {isEnabled ? '● ACTIVE FAULTS INJECTING' : '○ INACTIVE'}
             </span>
           </div>
-          <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.875rem', maxWidth: '650px' }}>
-            Simulate unpredictable network jitter, server crashes, simulated rate limits, and raw socket disconnects to test SDK resilience and circuit breakers.
+          <p
+            className="muted"
+            style={{ margin: '6px 0 0', fontSize: '0.875rem', maxWidth: '650px' }}
+          >
+            Simulate unpredictable network jitter, server crashes, simulated rate limits, and raw
+            socket disconnects to test SDK resilience and circuit breakers.
           </p>
         </div>
 
@@ -187,6 +213,12 @@ export default function ChaosStudioPage() {
         </div>
       </div>
 
+      {saveError && (
+        <div className="error" role="alert">
+          {saveError}
+        </div>
+      )}
+
       {saveSuccessMsg && (
         <div
           style={{
@@ -201,7 +233,14 @@ export default function ChaosStudioPage() {
             gap: '8px',
           }}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
             <polyline points="20 6 9 17 4 12" />
           </svg>
           {saveSuccessMsg}
@@ -224,7 +263,8 @@ export default function ChaosStudioPage() {
         <div>
           <strong style={{ fontSize: '1rem', display: 'block' }}>Master Chaos Engine Switch</strong>
           <span className="muted" style={{ fontSize: '0.8125rem' }}>
-            When toggled on, incoming requests to mock APIs evaluate the rules below in sub-millisecond memory before reaching endpoints.
+            When toggled on, incoming requests to mock APIs evaluate the rules below in
+            sub-millisecond memory before reaching endpoints.
           </span>
         </div>
         <label
@@ -272,9 +312,18 @@ export default function ChaosStudioPage() {
       </div>
 
       {/* Grid of 3 Chaos Controllers */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+          gap: '20px',
+        }}
+      >
         {/* 1. Network Latency Jitter */}
-        <div className="card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+        <div
+          className="card"
+          style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}
+        >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>Latency & Jitter</h3>
@@ -290,16 +339,32 @@ export default function ChaosStudioPage() {
             />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', opacity: latency.enabled ? 1 : 0.4 }}>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              opacity: latency.enabled ? 1 : 0.4,
+            }}
+          >
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', marginBottom: '6px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontSize: '0.8125rem',
+                  marginBottom: '6px',
+                }}
+              >
                 <span className="muted">Mean Delay (&mu;)</span>
-                <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{latency.meanMs} ms</strong>
+                <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
+                  {latency.meanMs} ms
+                </strong>
               </div>
               <input
                 type="range"
                 min="0"
-                max="2000"
+                max="5000"
                 step="25"
                 disabled={!latency.enabled}
                 value={latency.meanMs}
@@ -309,9 +374,18 @@ export default function ChaosStudioPage() {
             </div>
 
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', marginBottom: '6px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontSize: '0.8125rem',
+                  marginBottom: '6px',
+                }}
+              >
                 <span className="muted">Standard Deviation (&sigma;)</span>
-                <strong style={{ fontFamily: 'var(--font-mono)', color: '#a78bfa' }}>{latency.stddevMs} ms</strong>
+                <strong style={{ fontFamily: 'var(--font-mono)', color: '#a78bfa' }}>
+                  {latency.stddevMs} ms
+                </strong>
               </div>
               <input
                 type="range"
@@ -352,10 +426,15 @@ export default function ChaosStudioPage() {
         </div>
 
         {/* 2. Error Injection */}
-        <div className="card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+        <div
+          className="card"
+          style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}
+        >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>Fault Responses (5xx / 429)</h3>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>
+                Fault Responses (5xx / 429)
+              </h3>
               <p className="muted" style={{ margin: '2px 0 0', fontSize: '0.75rem' }}>
                 Probabilistic transient HTTP error responses
               </p>
@@ -368,9 +447,23 @@ export default function ChaosStudioPage() {
             />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', opacity: errors.enabled ? 1 : 0.4 }}>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              opacity: errors.enabled ? 1 : 0.4,
+            }}
+          >
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', marginBottom: '6px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontSize: '0.8125rem',
+                  marginBottom: '6px',
+                }}
+              >
                 <span className="muted">5xx Server Error Rate</span>
                 <strong style={{ fontFamily: 'var(--font-mono)', color: '#ef4444' }}>
                   {Math.round(errors.rate5xx * 100)}%
@@ -389,7 +482,14 @@ export default function ChaosStudioPage() {
             </div>
 
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', marginBottom: '6px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontSize: '0.8125rem',
+                  marginBottom: '6px',
+                }}
+              >
                 <span className="muted">Simulated 429 Throttle Rate</span>
                 <strong style={{ fontFamily: 'var(--font-mono)', color: '#f59e0b' }}>
                   {Math.round(errors.rate429 * 100)}%
@@ -408,7 +508,10 @@ export default function ChaosStudioPage() {
             </div>
 
             <div>
-              <span className="muted" style={{ fontSize: '0.75rem', display: 'block', marginBottom: '6px' }}>
+              <span
+                className="muted"
+                style={{ fontSize: '0.75rem', display: 'block', marginBottom: '6px' }}
+              >
                 Target 5xx Status Codes
               </span>
               <div style={{ display: 'flex', gap: '6px' }}>
@@ -440,10 +543,15 @@ export default function ChaosStudioPage() {
         </div>
 
         {/* 3. Connection Drops & Partition */}
-        <div className="card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+        <div
+          className="card"
+          style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}
+        >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>Network Partition (TCP RST)</h3>
+              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>
+                Network Partition (TCP RST)
+              </h3>
               <p className="muted" style={{ margin: '2px 0 0', fontSize: '0.75rem' }}>
                 True socket destruction without HTTP response
               </p>
@@ -456,9 +564,23 @@ export default function ChaosStudioPage() {
             />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', opacity: partition.enabled ? 1 : 0.4 }}>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              opacity: partition.enabled ? 1 : 0.4,
+            }}
+          >
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem', marginBottom: '6px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontSize: '0.8125rem',
+                  marginBottom: '6px',
+                }}
+              >
                 <span className="muted">Connection Drop Probability</span>
                 <strong style={{ fontFamily: 'var(--font-mono)', color: '#e11d48' }}>
                   {Math.round(partition.dropRate * 100)}%
@@ -487,29 +609,49 @@ export default function ChaosStudioPage() {
                 lineHeight: 1.5,
               }}
             >
-              Destroys raw TCP socket (`request.raw.destroy()`), triggering a genuine client-side `ECONNRESET`. Ideal for testing socket reconnects.
+              Destroys raw TCP socket (`request.raw.destroy()`), triggering a genuine client-side
+              `ECONNRESET`. Ideal for testing socket reconnects.
             </div>
           </div>
         </div>
       </div>
 
       {/* Resilience Benchmark Suite (The Self-Demonstrating Tool) */}
-      <div className="card" style={{ padding: '28px', display: 'flex', flexDirection: 'column', gap: '22px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+      <div
+        className="card"
+        style={{ padding: '28px', display: 'flex', flexDirection: 'column', gap: '22px' }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            flexWrap: 'wrap',
+            gap: '16px',
+          }}
+        >
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800 }}>"Test Your Resilience" Live Benchmark</h3>
-              <span className="badge" style={{ background: 'rgba(91, 140, 255, 0.15)', color: 'var(--accent)' }}>
+              <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800 }}>
+                "Test Your Resilience" Simulation
+              </h3>
+              <span
+                className="badge"
+                style={{ background: 'rgba(91, 140, 255, 0.15)', color: 'var(--accent)' }}
+              >
                 Differentiator
               </span>
             </div>
             <p className="muted" style={{ margin: '4px 0 0', fontSize: '0.8125rem' }}>
-              Executes a batch of requests against the active chaos profile to verify fault distributions and latency histograms.
+              Samples the active chaos profile in-process to preview its fault distribution and
+              latency histogram. No real requests are sent.
             </p>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span className="muted" style={{ fontSize: '0.8125rem' }}>Requests:</span>
+            <span className="muted" style={{ fontSize: '0.8125rem' }}>
+              Requests:
+            </span>
             <select
               value={benchmarkCount}
               onChange={(e) => setBenchmarkCount(Number(e.target.value))}
@@ -540,42 +682,117 @@ export default function ChaosStudioPage() {
 
         {/* Results Panel */}
         {benchmarkResult && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', paddingTop: '10px' }}>
+          <div
+            style={{ display: 'flex', flexDirection: 'column', gap: '20px', paddingTop: '10px' }}
+          >
             {/* 4 Stat Cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
-              <div style={{ background: '#0d1117', border: '1px solid var(--border)', borderRadius: '8px', padding: '16px' }}>
-                <span className="muted" style={{ fontSize: '0.75rem' }}>Success (2xx)</span>
-                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--success)', marginTop: '4px' }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '14px',
+              }}
+            >
+              <div
+                style={{
+                  background: '#0d1117',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  padding: '16px',
+                }}
+              >
+                <span className="muted" style={{ fontSize: '0.75rem' }}>
+                  Success (2xx)
+                </span>
+                <div
+                  style={{
+                    fontSize: '1.5rem',
+                    fontWeight: 800,
+                    color: 'var(--success)',
+                    marginTop: '4px',
+                  }}
+                >
                   {benchmarkResult.successful} / {benchmarkResult.totalRequests}
                 </div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
-                  {Math.round((benchmarkResult.successful / benchmarkResult.totalRequests) * 100)}% Pass Rate
+                  {Math.round((benchmarkResult.successful / benchmarkResult.totalRequests) * 100)}%
+                  Pass Rate
                 </span>
               </div>
 
-              <div style={{ background: '#0d1117', border: '1px solid var(--border)', borderRadius: '8px', padding: '16px' }}>
-                <span className="muted" style={{ fontSize: '0.75rem' }}>Server Faults (5xx)</span>
-                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#ef4444', marginTop: '4px' }}>
+              <div
+                style={{
+                  background: '#0d1117',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  padding: '16px',
+                }}
+              >
+                <span className="muted" style={{ fontSize: '0.75rem' }}>
+                  Server Faults (5xx)
+                </span>
+                <div
+                  style={{
+                    fontSize: '1.5rem',
+                    fontWeight: 800,
+                    color: '#ef4444',
+                    marginTop: '4px',
+                  }}
+                >
                   {benchmarkResult.errors5xx}
                 </div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
-                  {Math.round((benchmarkResult.errors5xx / benchmarkResult.totalRequests) * 100)}% Rate
+                  {Math.round((benchmarkResult.errors5xx / benchmarkResult.totalRequests) * 100)}%
+                  Rate
                 </span>
               </div>
 
-              <div style={{ background: '#0d1117', border: '1px solid var(--border)', borderRadius: '8px', padding: '16px' }}>
-                <span className="muted" style={{ fontSize: '0.75rem' }}>Network Drops</span>
-                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#e11d48', marginTop: '4px' }}>
+              <div
+                style={{
+                  background: '#0d1117',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  padding: '16px',
+                }}
+              >
+                <span className="muted" style={{ fontSize: '0.75rem' }}>
+                  Network Drops
+                </span>
+                <div
+                  style={{
+                    fontSize: '1.5rem',
+                    fontWeight: 800,
+                    color: '#e11d48',
+                    marginTop: '4px',
+                  }}
+                >
                   {benchmarkResult.dropped}
                 </div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
-                  {Math.round((benchmarkResult.dropped / benchmarkResult.totalRequests) * 100)}% ECONNRESET
+                  {Math.round((benchmarkResult.dropped / benchmarkResult.totalRequests) * 100)}%
+                  ECONNRESET
                 </span>
               </div>
 
-              <div style={{ background: '#0d1117', border: '1px solid var(--border)', borderRadius: '8px', padding: '16px' }}>
-                <span className="muted" style={{ fontSize: '0.75rem' }}>Latency Profile</span>
-                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--accent)', marginTop: '4px' }}>
+              <div
+                style={{
+                  background: '#0d1117',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  padding: '16px',
+                }}
+              >
+                <span className="muted" style={{ fontSize: '0.75rem' }}>
+                  Latency Profile
+                </span>
+                <div
+                  style={{
+                    fontSize: '1.5rem',
+                    fontWeight: 800,
+                    color: 'var(--accent)',
+                    marginTop: '4px',
+                  }}
+                >
                   {benchmarkResult.p95LatencyMs} ms
                 </div>
                 <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
@@ -586,19 +803,56 @@ export default function ChaosStudioPage() {
 
             {/* SVG Latency Histogram */}
             <div>
-              <span className="muted" style={{ fontSize: '0.8125rem', fontWeight: 600, display: 'block', marginBottom: '10px' }}>
+              <span
+                className="muted"
+                style={{
+                  fontSize: '0.8125rem',
+                  fontWeight: 600,
+                  display: 'block',
+                  marginBottom: '10px',
+                }}
+              >
                 Observed Latency Distribution (Histogram)
               </span>
-              <div style={{ background: '#0d1117', border: '1px solid var(--border)', borderRadius: '8px', padding: '20px' }}>
+              <div
+                style={{
+                  background: '#0d1117',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  padding: '20px',
+                }}
+              >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {benchmarkResult.histogram.map((bracket) => {
                     const pct = Math.round((bracket.count / benchmarkResult.totalRequests) * 100);
                     return (
-                      <div key={bracket.bracket} style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '0.75rem' }}>
-                        <span style={{ width: '100px', fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>
+                      <div
+                        key={bracket.bracket}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '14px',
+                          fontSize: '0.75rem',
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: '100px',
+                            fontFamily: 'var(--font-mono)',
+                            color: 'var(--muted)',
+                          }}
+                        >
                           {bracket.bracket}
                         </span>
-                        <div style={{ flex: 1, background: '#1c212d', height: '14px', borderRadius: '4px', overflow: 'hidden' }}>
+                        <div
+                          style={{
+                            flex: 1,
+                            background: '#1c212d',
+                            height: '14px',
+                            borderRadius: '4px',
+                            overflow: 'hidden',
+                          }}
+                        >
                           <div
                             style={{
                               width: `${pct}%`,
@@ -608,7 +862,13 @@ export default function ChaosStudioPage() {
                             }}
                           />
                         </div>
-                        <span style={{ width: '70px', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
+                        <span
+                          style={{
+                            width: '70px',
+                            textAlign: 'right',
+                            fontFamily: 'var(--font-mono)',
+                          }}
+                        >
                           {bracket.count} ({pct}%)
                         </span>
                       </div>

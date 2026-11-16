@@ -26,6 +26,28 @@ function formatDate(value: string | null): string {
   return new Date(value).toLocaleString();
 }
 
+/**
+ * What a key's state actually is right now. The stored status only says
+ * "active" or "revoked"; an expired key, or a superseded key whose grace
+ * window has closed, is still stored as active but no longer works.
+ */
+function effectiveStatus(key: ApiKeySummary): { label: string; className: string } {
+  const now = Date.now();
+  if (key.status === 'revoked') return { label: 'revoked', className: 'revoked' };
+  if (key.expiresAt && new Date(key.expiresAt).getTime() <= now) {
+    return { label: 'expired', className: 'revoked' };
+  }
+  if (key.graceUntil) {
+    const until = new Date(key.graceUntil).getTime();
+    if (until <= now) return { label: 'superseded', className: 'revoked' };
+    return {
+      label: `rotating — works until ${new Date(until).toLocaleString()}`,
+      className: 'method-put',
+    };
+  }
+  return { label: 'active', className: 'active' };
+}
+
 export default function KeysPage() {
   const queryClient = useQueryClient();
 
@@ -43,6 +65,8 @@ export default function KeysPage() {
   const [rotating, setRotating] = useState<ApiKeySummary | null>(null);
   const [revoking, setRevoking] = useState<ApiKeySummary | null>(null);
   const [revokeConfirmation, setRevokeConfirmation] = useState('');
+  // The kill switch: revoke every key in the rotation chain at once.
+  const [revokeFamily, setRevokeFamily] = useState(false);
 
   const createMutation = useMutation({
     mutationFn: api.createKey,
@@ -63,10 +87,12 @@ export default function KeysPage() {
   });
 
   const revokeMutation = useMutation({
-    mutationFn: ({ id }: { id: string }) => api.revokeKey(id),
+    mutationFn: ({ id, family }: { id: string; family: boolean }) =>
+      family ? api.revokeFamily(id) : api.revokeKey(id),
     onSuccess: async () => {
       setRevoking(null);
       setRevokeConfirmation('');
+      setRevokeFamily(false);
       await queryClient.invalidateQueries({ queryKey: ['keys'] });
     },
   });
@@ -169,7 +195,7 @@ export default function KeysPage() {
       )}
 
       {/* Keys Table */}
-      {!isLoading && filteredKeys.length === 0 ? (
+      {isLoading ? null : filteredKeys.length === 0 ? (
         <div className="card text-center" style={{ padding: '48px 24px' }}>
           <div style={{ color: 'var(--muted)', marginBottom: '12px' }}>
             <svg
@@ -217,7 +243,7 @@ export default function KeysPage() {
             </thead>
             <tbody>
               {filteredKeys.map((key) => {
-                const isRotating = key.graceUntil && key.status === 'active';
+                const status = effectiveStatus(key);
                 return (
                   <tr key={key.id}>
                     <td>
@@ -235,9 +261,7 @@ export default function KeysPage() {
                       </span>
                     </td>
                     <td>
-                      <span className={`badge ${isRotating ? 'method-put' : key.status}`}>
-                        {isRotating ? 'rotating (24h grace)' : key.status}
-                      </span>
+                      <span className={`badge ${status.className}`}>{status.label}</span>
                     </td>
                     <td className="muted" style={{ fontSize: '0.8125rem' }}>
                       {formatDate(key.lastUsedAt)}
@@ -326,7 +350,13 @@ export default function KeysPage() {
 
       {/* Revoke key modal */}
       {revoking && (
-        <Modal title="Revoke API Key" onClose={() => setRevoking(null)}>
+        <Modal
+          title="Revoke API Key"
+          onClose={() => {
+            setRevoking(null);
+            setRevokeFamily(false);
+          }}
+        >
           <div className="stack">
             <div className="warning">
               Revoking <strong style={{ color: 'var(--text)' }}>{revoking.name}</strong> is
@@ -345,6 +375,17 @@ export default function KeysPage() {
                 placeholder={revoking.name}
               />
             </div>
+            <label className="scope-option">
+              <input
+                type="checkbox"
+                checked={revokeFamily}
+                onChange={(event) => setRevokeFamily(event.target.checked)}
+              />
+              <span>
+                Kill switch: also revoke every other key rotated from this one (use when the key may
+                be compromised)
+              </span>
+            </label>
             {revokeMutation.error && <div className="error">{message(revokeMutation.error)}</div>}
             <div
               className="row"
@@ -368,10 +409,20 @@ export default function KeysPage() {
                   opacity:
                     revokeConfirmation !== revoking.name || revokeMutation.isPending ? 0.6 : 1,
                 }}
-                onClick={() => revokeMutation.mutate({ id: revoking.id })}
+                onClick={() =>
+                  revokeMutation.mutate(
+                    revokeFamily
+                      ? { id: revoking.familyId, family: true }
+                      : { id: revoking.id, family: false },
+                  )
+                }
                 disabled={revokeConfirmation !== revoking.name || revokeMutation.isPending}
               >
-                {revokeMutation.isPending ? 'Revoking Key…' : 'Permanently Revoke Key'}
+                {revokeMutation.isPending
+                  ? 'Revoking…'
+                  : revokeFamily
+                    ? 'Revoke Entire Key Family'
+                    : 'Permanently Revoke Key'}
               </button>
             </div>
           </div>
@@ -398,6 +449,7 @@ function CreateKeyDialog({ pending, error, onCancel, onSubmit }: CreateKeyDialog
   const [env, setEnv] = useState<KeyEnv>('test');
   const [scopes, setScopes] = useState<KeyScope[]>(['mock:read']);
   const [expiry, setExpiry] = useState('');
+  const [nameError, setNameError] = useState<string | null>(null);
 
   function toggleScope(scope: KeyScope) {
     setScopes((current) =>
@@ -408,6 +460,11 @@ function CreateKeyDialog({ pending, error, onCancel, onSubmit }: CreateKeyDialog
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const expiresInDays = expiry ? Number.parseInt(expiry, 10) : null;
+    // `required` accepts a name of only spaces; the server does not.
+    if (name.trim().length === 0) {
+      setNameError('Enter a name for the key');
+      return;
+    }
     onSubmit({
       name: name.trim(),
       env,
@@ -424,7 +481,10 @@ function CreateKeyDialog({ pending, error, onCancel, onSubmit }: CreateKeyDialog
           <input
             id="key-name"
             value={name}
-            onChange={(event) => setName(event.target.value)}
+            onChange={(event) => {
+              setName(event.target.value);
+              setNameError(null);
+            }}
             placeholder="e.g. ci-pipeline-key"
             required
             maxLength={80}
@@ -481,6 +541,7 @@ function CreateKeyDialog({ pending, error, onCancel, onSubmit }: CreateKeyDialog
           />
         </div>
 
+        {nameError && <div className="error">{nameError}</div>}
         {error && <div className="error">{error}</div>}
 
         <div className="row" style={{ justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>

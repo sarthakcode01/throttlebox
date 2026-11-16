@@ -256,18 +256,20 @@ export default function ServicesPage() {
                     >
                       OpenAPI Docs &rarr;
                     </Link>
-                    <button
-                      onClick={() => setDeletingServiceId(selected.id)}
-                      className="secondary-button"
-                      style={{
-                        padding: '6px 12px',
-                        fontSize: '0.8125rem',
-                        color: 'var(--danger)',
-                        borderColor: 'rgba(255, 107, 107, 0.4)',
-                      }}
-                    >
-                      Delete Service
-                    </button>
+                    {!selected.isSeeded && (
+                      <button
+                        onClick={() => setDeletingServiceId(selected.id)}
+                        className="secondary-button"
+                        style={{
+                          padding: '6px 12px',
+                          fontSize: '0.8125rem',
+                          color: 'var(--danger)',
+                          borderColor: 'rgba(255, 107, 107, 0.4)',
+                        }}
+                      >
+                        Delete Service
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -373,9 +375,19 @@ export default function ServicesPage() {
                         </div>
 
                         <div className="row" style={{ gap: '10px' }}>
-                          <span className="badge" style={{ color: 'var(--success)' }}>
-                            {route.statusCode} OK
+                          <span
+                            className="badge"
+                            style={{
+                              color: route.statusCode < 400 ? 'var(--success)' : 'var(--danger)',
+                            }}
+                          >
+                            {route.statusCode}
                           </span>
+                          {!route.isActive && (
+                            <span className="badge" style={{ color: 'var(--muted)' }}>
+                              inactive
+                            </span>
+                          )}
                           {route.latencyMs > 0 && (
                             <span className="badge" style={{ color: 'var(--muted)' }}>
                               +{route.latencyMs}ms
@@ -426,12 +438,19 @@ export default function ServicesPage() {
 
       {/* Delete Service Confirmation Modal */}
       {deletingServiceId && selected && (
-        <Modal title="Delete Mock Service" onClose={() => setDeletingServiceId(null)}>
+        <Modal
+          title="Delete Mock Service"
+          onClose={() => {
+            setDeletingServiceId(null);
+            deleteService.reset();
+          }}
+        >
           <div className="stack">
             <div className="warning">
               Deleting service <strong>{selected.name}</strong> will delete all of its routes and
               OpenAPI specifications. This action cannot be undone.
             </div>
+            {deleteService.error && <div className="error">{message(deleteService.error)}</div>}
             <div
               className="row"
               style={{ justifyContent: 'flex-end', gap: '10px', marginTop: '14px' }}
@@ -449,11 +468,14 @@ export default function ServicesPage() {
                   fontWeight: 600,
                   cursor: deleteService.isPending ? 'not-allowed' : 'pointer',
                 }}
-                onClick={async () => {
-                  await deleteService.mutateAsync(deletingServiceId);
-                  setDeletingServiceId(null);
-                  setSelectedId(null);
-                }}
+                onClick={() =>
+                  deleteService.mutate(deletingServiceId, {
+                    onSuccess: () => {
+                      setDeletingServiceId(null);
+                      setSelectedId(null);
+                    },
+                  })
+                }
                 disabled={deleteService.isPending}
               >
                 {deleteService.isPending ? 'Deleting…' : 'Delete Service'}
@@ -472,11 +494,14 @@ export default function ServicesPage() {
             setCreatingService(false);
             createService.reset();
           }}
-          onSubmit={async (body) => {
-            const res = await createService.mutateAsync(body);
-            setCreatingService(false);
-            setSelectedId(res.service.id);
-          }}
+          onSubmit={(body) =>
+            createService.mutate(body, {
+              onSuccess: (res) => {
+                setCreatingService(false);
+                setSelectedId(res.service.id);
+              },
+            })
+          }
         />
       )}
 
@@ -490,10 +515,12 @@ export default function ServicesPage() {
             setCreatingRoute(false);
             createRoute.reset();
           }}
-          onSubmit={async (body) => {
-            await createRoute.mutateAsync({ serviceId: selected.id, body });
-            setCreatingRoute(false);
-          }}
+          onSubmit={(body) =>
+            createRoute.mutate(
+              { serviceId: selected.id, body },
+              { onSuccess: () => setCreatingRoute(false) },
+            )
+          }
         />
       )}
 
@@ -508,10 +535,12 @@ export default function ServicesPage() {
             setEditingRoute(null);
             updateRoute.reset();
           }}
-          onSubmit={async (body) => {
-            await updateRoute.mutateAsync({ id: editingRoute.id, body });
-            setEditingRoute(null);
-          }}
+          onSubmit={(body) =>
+            updateRoute.mutate(
+              { id: editingRoute.id, body },
+              { onSuccess: () => setEditingRoute(null) },
+            )
+          }
         />
       )}
 
@@ -634,7 +663,8 @@ function PreviewDialog({
     <Modal title={`Live Template Preview — ${route.method} ${route.path}`} onClose={onClose}>
       <div className="stack">
         <p className="muted" style={{ margin: 0, fontSize: '0.875rem' }}>
-          Evaluate Handlebars and Faker expressions through the actual mock execution pipeline.
+          Evaluate template and Faker expressions through the actual mock execution pipeline. Add a
+          query string (e.g. <code>?page=2</code>) to the path to test query parameters.
         </p>
 
         <div className="row" style={{ alignItems: 'flex-end', gap: '10px' }}>
@@ -729,6 +759,10 @@ function RouteForm({ service, initial, pending, error, onCancel, onSubmit }: Rou
     ),
   );
   const [templateError, setTemplateError] = useState<string | null>(null);
+  const [description, setDescription] = useState(initial?.description ?? '');
+  const [latencyMs, setLatencyMs] = useState(String(initial?.latencyMs ?? 0));
+  const [isActive, setIsActive] = useState(initial?.isActive ?? true);
+  const [headers, setHeaders] = useState(JSON.stringify(initial?.responseHeaders ?? {}, null, 2));
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -740,14 +774,34 @@ function RouteForm({ service, initial, pending, error, onCancel, onSubmit }: Rou
       setTemplateError('The response template must be valid JSON');
       return;
     }
+
+    let parsedHeaders: Record<string, string>;
+    try {
+      const value = JSON.parse(headers || '{}') as unknown;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
+      parsedHeaders = value as Record<string, string>;
+    } catch {
+      setTemplateError('Response headers must be a JSON object of name → value');
+      return;
+    }
+
+    const status = Number(statusCode);
+    if (!Number.isInteger(status) || status < 100 || status > 599) {
+      setTemplateError('The HTTP status code must be between 100 and 599');
+      return;
+    }
     setTemplateError(null);
 
     onSubmit({
       method,
       path: path.trim(),
       summary: summary.trim(),
-      statusCode: Number(statusCode),
+      description: description.trim(),
+      statusCode: status,
       responseTemplate: parsed,
+      responseHeaders: parsedHeaders,
+      latencyMs: Math.max(0, Math.min(30_000, Number(latencyMs) || 0)),
+      isActive,
     });
   }
 
@@ -809,6 +863,53 @@ function RouteForm({ service, initial, pending, error, onCancel, onSubmit }: Rou
             placeholder="e.g. Retrieve single product by id"
             maxLength={200}
           />
+        </div>
+
+        <div>
+          <label htmlFor="route-description">Description (shown in the OpenAPI document)</label>
+          <input
+            id="route-description"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            maxLength={2000}
+          />
+        </div>
+
+        <div className="row" style={{ gap: '10px', alignItems: 'flex-end' }}>
+          <div style={{ flex: '0 0 160px' }}>
+            <label htmlFor="route-latency">Artificial latency (ms)</label>
+            <input
+              id="route-latency"
+              type="number"
+              min={0}
+              max={30000}
+              value={latencyMs}
+              onChange={(event) => setLatencyMs(event.target.value)}
+            />
+          </div>
+          <label className="scope-option" style={{ marginBottom: '8px' }}>
+            <input
+              type="checkbox"
+              checked={isActive}
+              onChange={(event) => setIsActive(event.target.checked)}
+            />
+            <span>Active</span>
+          </label>
+        </div>
+
+        <div>
+          <label htmlFor="route-headers">Response headers (JSON object)</label>
+          <textarea
+            id="route-headers"
+            value={headers}
+            onChange={(event) => setHeaders(event.target.value)}
+            rows={3}
+            spellCheck={false}
+            className="code-input"
+          />
+          <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.75rem' }}>
+            Values may use template tags, e.g. <code>{'"Location": "/orders/{{params.id}}"'}</code>.
+          </p>
         </div>
 
         <div>
