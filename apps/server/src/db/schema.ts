@@ -317,20 +317,26 @@ export const mockRoutes = pgTable(
 // Relations
 // ---------------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------------
 // Telemetry & Logging (Phase 5)
 // ---------------------------------------------------------------------------
 
+/**
+ * Raw request telemetry, stored as a TimescaleDB hypertable.
+ *
+ * Deliberately no foreign keys, for the same reason as `api_key_events`.
+ * A foreign key on a hypertable makes every parent delete lock and scan
+ * each chunk. Worse, ingestion is batched: one queued row that points at
+ * a service deleted a moment earlier would fail the whole INSERT. Orphan
+ * ids are harmless here, and the retention policy ages them out.
+ */
 export const requestLogs = pgTable(
   'request_logs',
   {
     time: timestamp('time', { withTimezone: true }).notNull().defaultNow(),
-    keyId: uuid('key_id').references(() => apiKeys.id, { onDelete: 'set null' }),
-    orgId: uuid('org_id')
-      .notNull()
-      .references(() => orgs.id, { onDelete: 'cascade' }),
-    serviceId: uuid('service_id').references(() => mockServices.id, { onDelete: 'set null' }),
+    keyId: uuid('key_id'),
+    orgId: uuid('org_id').notNull(),
+    serviceId: uuid('service_id'),
     method: text('method').notNull(),
     path: text('path').notNull(),
     statusCode: integer('status_code').notNull(),
@@ -381,12 +387,14 @@ export const chaosRules = pgTable(
       minMs: 0,
       maxMs: 30000,
     }),
-    errors: jsonb('errors').notNull().default({
-      enabled: false,
-      rate5xx: 0.0,
-      rate429: 0.0,
-      statusCodes: [500, 502, 503, 504],
-    }),
+    errors: jsonb('errors')
+      .notNull()
+      .default({
+        enabled: false,
+        rate5xx: 0.0,
+        rate429: 0.0,
+        statusCodes: [500, 502, 503, 504],
+      }),
     partition: jsonb('partition').notNull().default({
       enabled: false,
       dropRate: 0.0,
@@ -397,6 +405,18 @@ export const chaosRules = pgTable(
   (table) => [
     index('chaos_rules_org_idx').on(table.orgId),
     uniqueIndex('chaos_rules_scope_idx').on(table.orgId, table.serviceId, table.keyId),
+    // Postgres treats NULLs as distinct, so the index above cannot stop two
+    // org-wide defaults (or two service rules) from coexisting. These
+    // partial indexes give each scope exactly one row.
+    uniqueIndex('chaos_rules_org_default_idx')
+      .on(table.orgId)
+      .where(sql`${table.serviceId} IS NULL AND ${table.keyId} IS NULL`),
+    uniqueIndex('chaos_rules_service_idx')
+      .on(table.orgId, table.serviceId)
+      .where(sql`${table.keyId} IS NULL AND ${table.serviceId} IS NOT NULL`),
+    uniqueIndex('chaos_rules_key_idx')
+      .on(table.orgId, table.keyId)
+      .where(sql`${table.serviceId} IS NULL AND ${table.keyId} IS NOT NULL`),
   ],
 );
 
@@ -443,7 +463,6 @@ export const mockServicesRelations = relations(mockServices, ({ one, many }) => 
 export const mockRoutesRelations = relations(mockRoutes, ({ one }) => ({
   service: one(mockServices, { fields: [mockRoutes.serviceId], references: [mockServices.id] }),
 }));
-
 
 export const requestLogsRelations = relations(requestLogs, ({ one }) => ({
   org: one(orgs, { fields: [requestLogs.orgId], references: [orgs.id] }),
