@@ -8,6 +8,7 @@ import { runSessionCleanup } from '../../src/auth/janitor.js';
 import { db } from '../../src/db/client.js';
 import { sessions } from '../../src/db/schema.js';
 import { lt } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
 
 /**
  * Tests for the hardening added in the Phase 0-2 audit.
@@ -18,10 +19,13 @@ describe('rate limiter', () => {
 
   beforeAll(async () => {
     app = Fastify();
+    // The budget lives in Redis now, so each run needs its own bucket or a
+    // rerun inside the window would start out blocked.
+    const run = randomUUID();
     const limiter = createRateLimit({
       max: 3,
       windowMs: 60_000,
-      keyGenerator: (req) => `test:${req.ip}`,
+      keyGenerator: (req) => `test:${run}:${req.ip}`,
     });
 
     app.get('/limited', { preHandler: limiter.handler }, async () => ({ ok: true }));

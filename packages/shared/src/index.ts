@@ -19,8 +19,24 @@ export type Role = (typeof ROLES)[number];
  */
 export const PERMISSIONS: Record<Role, readonly string[]> = {
   owner: ['*'],
-  admin: ['keys:*', 'members:invite', 'plugins:deploy', 'mock:*', 'chaos:*', 'org:*', 'analytics:*'],
-  dev: ['keys:create', 'keys:read', 'keys:rotate', 'keys:revoke', 'mock:*', 'chaos:*', 'analytics:*'],
+  admin: [
+    'keys:*',
+    'members:invite',
+    'plugins:deploy',
+    'mock:*',
+    'chaos:*',
+    'org:*',
+    'analytics:*',
+  ],
+  dev: [
+    'keys:create',
+    'keys:read',
+    'keys:rotate',
+    'keys:revoke',
+    'mock:*',
+    'chaos:*',
+    'analytics:*',
+  ],
   viewer: ['keys:read', 'mock:read', 'analytics:read'],
 };
 
@@ -67,16 +83,19 @@ export const PLAN_CONFIGS: Record<Plan, PlanConfig> = {
   },
 };
 
-export const PLAN_LIMITS: Record<
-  Plan,
-  { requests: number; windowSeconds: number; burstAllowance: number }
-> = {
-  free: { requests: 100, windowSeconds: 3600, burstAllowance: 1.0 },
-  pro: { requests: 5000, windowSeconds: 3600, burstAllowance: 1.2 },
-};
-
 export interface UpdateOrgPlanRequest {
   plan: Plan;
+}
+
+/** `GET /api/org/plan`: the plan, and how much of its window is used. */
+export interface OrgPlanResponse {
+  plan: PlanConfig;
+  usage?: {
+    /** Requests counted in the current window; null when unavailable. */
+    used: number | null;
+    /** The effective limit, burst allowance included. */
+    limit: number;
+  };
 }
 
 export interface RateLimitResult {
@@ -116,12 +135,13 @@ export interface SessionUser {
 
 export interface MeResponse {
   user: SessionUser;
+  /** Null for a user who belongs to no organization. */
   org: {
     id: string;
     name: string;
     plan: Plan;
-  };
-  role: Role;
+  } | null;
+  role: Role | null;
 }
 
 export interface AuthErrorResponse {
@@ -317,10 +337,19 @@ export interface WebhookConfig {
   id: string;
   orgId: string;
   url: string;
-  secret: string; // HMAC secret
+  /**
+   * A masked form of the HMAC signing secret, e.g. `whsec_…9f3a`. The secret
+   * is a credential, so the full value is never returned after creation.
+   */
+  secretPreview: string;
   isActive: boolean;
   lastAlertedThreshold: number | null;
   createdAt: string;
+}
+
+/** The create response — the only one that carries the full secret. */
+export interface CreatedWebhookConfig extends WebhookConfig {
+  secret: string;
 }
 
 export interface CreateWebhookRequest {
@@ -410,4 +439,3 @@ export interface ChaosBenchmarkResult {
     count: number;
   }[];
 }
-

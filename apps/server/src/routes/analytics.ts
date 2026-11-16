@@ -1,5 +1,8 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { db } from '../db/client.js';
+import { apiKeys, mockServices } from '../db/schema.js';
 import {
   getErrorsBreakdown,
   getLatencySeries,
@@ -13,10 +16,33 @@ import {
   deleteOrgWebhook,
   isValidWebhookUrl,
   listOrgWebhooks,
+  MIN_WEBHOOK_SECRET_LENGTH,
   testOrgWebhook,
 } from '../analytics/webhooks.js';
 
 const rangeSchema = z.enum(['1h', '24h', '7d', '30d']).default('24h');
+
+const usageQuerySchema = z.object({
+  range: z.string().optional(),
+  keyId: z.string().uuid('keyId must be a UUID').optional(),
+  serviceId: z.string().uuid('serviceId must be a UUID').optional(),
+});
+
+const logsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+});
+
+const idParamsSchema = z.object({ id: z.string().uuid('Invalid webhook id') });
+
+function parseRange(raw: unknown): TimeRange {
+  const parsed = rangeSchema.safeParse(raw);
+  return (parsed.success ? parsed.data : '24h') as TimeRange;
+}
+
+function badRequest(reply: FastifyReply, message: string) {
+  return reply.code(400).send({ error: 'validation_error', message });
+}
 
 export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
   // Ensure caller has active session and valid orgId
@@ -34,9 +60,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
     { preHandler: [fastify.requirePermission('analytics:read')] },
     async (request, reply) => {
       const orgId = request.auth!.orgId!;
-      const query = request.query as { range?: string };
-      const parsedRange = rangeSchema.safeParse(query.range);
-      const range = (parsedRange.success ? parsedRange.data : '24h') as TimeRange;
+      const range = parseRange((request.query as { range?: string }).range);
 
       const overview = await getOverview(orgId, range);
       return reply.send(overview);
@@ -49,11 +73,35 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
     { preHandler: [fastify.requirePermission('analytics:read')] },
     async (request, reply) => {
       const orgId = request.auth!.orgId!;
-      const query = request.query as { range?: string; keyId?: string; serviceId?: string };
-      const parsedRange = rangeSchema.safeParse(query.range);
-      const range = (parsedRange.success ? parsedRange.data : '24h') as TimeRange;
+      const query = usageQuerySchema.safeParse(request.query);
+      if (!query.success) {
+        return badRequest(reply, query.error.issues[0]?.message ?? 'Invalid query');
+      }
+      const { keyId, serviceId } = query.data;
 
-      const series = await getUsageSeries(orgId, range, query.keyId, query.serviceId);
+      // A filter on another org's key or service used to return an empty
+      // series — an oracle for whether the id exists. Check ownership and
+      // answer 404 for anything that is not this org's.
+      if (keyId) {
+        const [key] = await db
+          .select({ id: apiKeys.id })
+          .from(apiKeys)
+          .where(and(eq(apiKeys.id, keyId), eq(apiKeys.orgId, orgId)))
+          .limit(1);
+        if (!key) return reply.code(404).send({ error: 'not_found', message: 'API key not found' });
+      }
+      if (serviceId) {
+        const [service] = await db
+          .select({ id: mockServices.id })
+          .from(mockServices)
+          .where(and(eq(mockServices.id, serviceId), eq(mockServices.orgId, orgId)))
+          .limit(1);
+        if (!service) {
+          return reply.code(404).send({ error: 'not_found', message: 'Service not found' });
+        }
+      }
+
+      const series = await getUsageSeries(orgId, parseRange(query.data.range), keyId, serviceId);
       return reply.send({ series });
     },
   );
@@ -64,9 +112,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
     { preHandler: [fastify.requirePermission('analytics:read')] },
     async (request, reply) => {
       const orgId = request.auth!.orgId!;
-      const query = request.query as { range?: string };
-      const parsedRange = rangeSchema.safeParse(query.range);
-      const range = (parsedRange.success ? parsedRange.data : '24h') as TimeRange;
+      const range = parseRange((request.query as { range?: string }).range);
 
       const series = await getLatencySeries(orgId, range);
       return reply.send({ series });
@@ -79,9 +125,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
     { preHandler: [fastify.requirePermission('analytics:read')] },
     async (request, reply) => {
       const orgId = request.auth!.orgId!;
-      const query = request.query as { range?: string };
-      const parsedRange = rangeSchema.safeParse(query.range);
-      const range = (parsedRange.success ? parsedRange.data : '24h') as TimeRange;
+      const range = parseRange((request.query as { range?: string }).range);
 
       const breakdown = await getErrorsBreakdown(orgId, range);
       return reply.send(breakdown);
@@ -94,11 +138,13 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
     { preHandler: [fastify.requirePermission('analytics:read')] },
     async (request, reply) => {
       const orgId = request.auth!.orgId!;
-      const query = request.query as { limit?: string; offset?: string };
-      const limit = query.limit ? parseInt(query.limit, 10) : 50;
-      const offset = query.offset ? parseInt(query.offset, 10) : 0;
+      // `parseInt('abc')` used to reach the query as `LIMIT NaN` and fail.
+      const query = logsQuerySchema.safeParse(request.query);
+      if (!query.success) {
+        return badRequest(reply, query.error.issues[0]?.message ?? 'Invalid pagination');
+      }
 
-      const result = await getRecentLogs(orgId, limit, offset);
+      const result = await getRecentLogs(orgId, query.data.limit, query.data.offset);
       return reply.send(result);
     },
   );
@@ -116,8 +162,17 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
 
   // 7. Create Webhook
   const createWebhookSchema = z.object({
-    url: z.string().url('A valid URL is required'),
-    secret: z.string().optional(),
+    url: z.string().url('A valid URL is required').max(2048),
+    secret: z
+      .string()
+      .trim()
+      .min(
+        MIN_WEBHOOK_SECRET_LENGTH,
+        `A signing secret needs at least ${MIN_WEBHOOK_SECRET_LENGTH} characters`,
+      )
+      .max(200)
+      .optional()
+      .or(z.literal('').transform(() => undefined)),
   });
 
   fastify.post(
@@ -127,10 +182,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
       const orgId = request.auth!.orgId!;
       const parsed = createWebhookSchema.safeParse(request.body);
       if (!parsed.success) {
-        return reply.code(400).send({
-          error: 'validation_error',
-          message: parsed.error.issues[0]?.message ?? 'Invalid input',
-        });
+        return badRequest(reply, parsed.error.issues[0]?.message ?? 'Invalid input');
       }
 
       const urlCheck = isValidWebhookUrl(parsed.data.url);
@@ -152,9 +204,13 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
     { preHandler: [fastify.requirePermission('analytics:write')] },
     async (request, reply) => {
       const orgId = request.auth!.orgId!;
-      const { id } = request.params as { id: string };
+      const params = idParamsSchema.safeParse(request.params);
+      if (!params.success) return badRequest(reply, 'Invalid webhook id');
 
-      await deleteOrgWebhook(orgId, id);
+      const deleted = await deleteOrgWebhook(orgId, params.data.id);
+      if (!deleted) {
+        return reply.code(404).send({ error: 'not_found', message: 'Webhook not found' });
+      }
       return reply.send({ success: true });
     },
   );
@@ -165,9 +221,13 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
     { preHandler: [fastify.requirePermission('analytics:write')] },
     async (request, reply) => {
       const orgId = request.auth!.orgId!;
-      const { id } = request.params as { id: string };
+      const params = idParamsSchema.safeParse(request.params);
+      if (!params.success) return badRequest(reply, 'Invalid webhook id');
 
-      const result = await testOrgWebhook(orgId, id);
+      const result = await testOrgWebhook(orgId, params.data.id);
+      if (!result) {
+        return reply.code(404).send({ error: 'not_found', message: 'Webhook not found' });
+      }
       return reply.send(result);
     },
   );

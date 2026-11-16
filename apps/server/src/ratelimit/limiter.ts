@@ -20,10 +20,15 @@ export function resetScriptSha(): void {
 export interface CheckRateLimitOptions {
   keyId?: string;
   orgId?: string;
+  /** An explicit Redis key, for limiters that are not per org or per key. */
+  bucketKey?: string;
   limit: number;
   windowSeconds: number;
   simulatedNowMs?: number;
 }
+
+/** A limiter decision. `degraded` means Redis failed and the call failed open. */
+export type CheckRateLimitResult = RateLimitResult & { degraded?: boolean };
 
 /**
  * Check and record a request in the sliding window.
@@ -34,9 +39,12 @@ export interface CheckRateLimitOptions {
  * If Redis is temporarily unreachable, logs a warning and fails open
  * to avoid taking down caller traffic during minor blips.
  */
-export async function checkRateLimit(options: CheckRateLimitOptions): Promise<RateLimitResult> {
+export async function checkRateLimit(
+  options: CheckRateLimitOptions,
+): Promise<CheckRateLimitResult> {
   const { keyId, orgId, limit, windowSeconds, simulatedNowMs } = options;
-  const bucketKey = orgId ? `rate:org:${orgId}` : `rate:key:${keyId ?? 'unknown'}`;
+  const bucketKey =
+    options.bucketKey ?? (orgId ? `rate:org:${orgId}` : `rate:key:${keyId ?? 'unknown'}`);
   const windowMs = windowSeconds * 1000;
   const memberId = `${Date.now()}:${randomBytes(6).toString('hex')}`;
   const nowMsArg = simulatedNowMs && simulatedNowMs > 0 ? String(simulatedNowMs) : '0';
@@ -92,6 +100,32 @@ export async function checkRateLimit(options: CheckRateLimitOptions): Promise<Ra
       limit,
       remaining: Math.max(0, limit - 1),
       resetAt: Math.ceil((Date.now() + windowMs) / 1000),
+      degraded: true,
     };
+  }
+}
+
+/**
+ * How many requests an org has made in its current window.
+ *
+ * Reads the limiter's own sorted set, so it is exact and costs one Redis
+ * round trip, where a `count(*)` over `request_logs` scanned the hypertable.
+ * Returns null when Redis is unavailable.
+ */
+export async function getOrgWindowUsage(
+  orgId: string,
+  windowSeconds: number,
+): Promise<number | null> {
+  const key = `rate:org:${orgId}`;
+  try {
+    const [, count] = await redis
+      .multi()
+      .zremrangebyscore(key, '-inf', Date.now() - windowSeconds * 1000)
+      .zcard(key)
+      .exec()
+      .then((results) => (results ?? []).map(([, value]) => value));
+    return typeof count === 'number' ? count : null;
+  } catch {
+    return null;
   }
 }

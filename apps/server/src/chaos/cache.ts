@@ -22,6 +22,9 @@ interface LocalEntry {
 }
 
 const localCache = new Map<string, LocalEntry>();
+
+/** Bumped on every invalidation; see `getCachedChaosRule`. */
+let cacheGeneration = 0;
 let subscriberRedis: Redis | null = null;
 
 function makeKey(orgId: string, serviceId?: string | null, keyId?: string | null): string {
@@ -108,6 +111,10 @@ export async function getCachedChaosRule(
 ): Promise<ChaosRuleConfig | null> {
   const cacheKey = makeKey(orgId, serviceId, keyId);
   const now = Date.now();
+  // A lookup that started before an invalidation must not write what it
+  // read back into the caches afterwards, or the old rule would come back
+  // for the length of the TTL.
+  const generation = cacheGeneration;
 
   // 1. Check in-memory L1 cache
   const local = localCache.get(cacheKey);
@@ -120,7 +127,9 @@ export async function getCachedChaosRule(
     const cached = await redis.get(cacheKey);
     if (cached !== null) {
       const parsed = cached === '' ? null : (JSON.parse(cached) as ChaosRuleConfig);
-      setLocalCache(cacheKey, { rule: parsed, expiresAt: now + LOCAL_CACHE_TTL_MS });
+      if (generation === cacheGeneration) {
+        setLocalCache(cacheKey, { rule: parsed, expiresAt: now + LOCAL_CACHE_TTL_MS });
+      }
       return parsed;
     }
   } catch (err) {
@@ -149,6 +158,8 @@ export async function getCachedChaosRule(
 
   const ruleConfig = row ? toChaosRuleConfig(row) : null;
 
+  if (generation !== cacheGeneration) return ruleConfig;
+
   // Populate L2 (Redis) and L1 (Memory)
   try {
     const val = ruleConfig ? JSON.stringify(ruleConfig) : '';
@@ -162,6 +173,21 @@ export async function getCachedChaosRule(
 }
 
 /**
+ * Delete every cached rule for an org.
+ *
+ * `SCAN`, not `KEYS`: `KEYS` walks the whole keyspace in one blocking call,
+ * which stalls every other Redis client on the instance.
+ */
+async function deleteOrgKeys(orgId: string): Promise<void> {
+  let cursor = '0';
+  do {
+    const [next, keys] = await redis.scan(cursor, 'MATCH', `chaos:rule:${orgId}:*`, 'COUNT', 200);
+    cursor = next;
+    if (keys.length > 0) await redis.del(...keys);
+  } while (cursor !== '0');
+}
+
+/**
  * Invalidates chaos rule cache locally and broadcasts across Redis Pub/Sub.
  */
 export async function invalidateChaosRule(
@@ -171,6 +197,7 @@ export async function invalidateChaosRule(
   broadcast = true,
 ): Promise<void> {
   const cacheKey = makeKey(orgId, serviceId, keyId);
+  cacheGeneration += 1;
   localCache.delete(cacheKey);
 
   // Clear all local cache entries for this org to handle wildcards cleanly
@@ -183,15 +210,12 @@ export async function invalidateChaosRule(
   try {
     if (!serviceId && !keyId) {
       // When resetting or modifying org defaults, invalidate all Redis keys for this org
-      const keys = await redis.keys(`chaos:rule:${orgId}:*`);
-      if (keys.length > 0) {
-        await redis.del(...keys);
-      }
+      await deleteOrgKeys(orgId);
     } else {
       await redis.del(cacheKey);
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('[chaos:cache] Redis invalidation error:', err);
   }
 
   if (broadcast) {

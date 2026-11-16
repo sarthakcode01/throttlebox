@@ -3,7 +3,8 @@ import type { KeyEnv, KeyScope } from '@throttlebox/shared';
 import { db } from '../db/client.js';
 import { apiKeyFamilies, apiKeys } from '../db/schema.js';
 import { recordEventSafe } from './audit.js';
-import { getCachedKey, setCachedKey } from './cache.js';
+import { redis } from '../db/redis.js';
+import { getCachedKey, isKnownMissingKey, rememberMissingKey, setCachedKey } from './cache.js';
 import { DUMMY_SECRET_HASH, hashSecret, safeEqualHex } from './generate.js';
 import { parseKey, SECRET_LENGTH } from './format.js';
 import { normalizeScopes } from './store.js';
@@ -42,6 +43,14 @@ export async function verifyKey(raw: string): Promise<AuthKeyContext | null> {
   // 2. Redis-cached lookup before hitting Postgres.
   let row = await getCachedKey(parsed.publicId);
 
+  // A public id that was looked up moments ago and did not exist is not
+  // looked up again. Burn the same HMAC as a real miss so timing is flat.
+  if (!row && (await isKnownMissingKey(parsed.publicId))) {
+    const dummy = hashSecret(parsed.publicId, 'x'.repeat(SECRET_LENGTH));
+    safeEqualHex(dummy, DUMMY_SECRET_HASH);
+    return null;
+  }
+
   if (!row) {
     const [dbRow] = await db
       .select({
@@ -66,6 +75,7 @@ export async function verifyKey(raw: string): Promise<AuthKeyContext | null> {
       // attacker cannot enumerate valid public ids by timing the response.
       const dummy = hashSecret(parsed.publicId, 'x'.repeat(SECRET_LENGTH));
       safeEqualHex(dummy, DUMMY_SECRET_HASH);
+      await rememberMissingKey(parsed.publicId);
       return null;
     }
 
@@ -134,11 +144,18 @@ export async function verifyKey(raw: string): Promise<AuthKeyContext | null> {
   };
 }
 
+/** One audit row per key and failure reason inside this window. */
+const FAILURE_AUDIT_WINDOW_SECONDS = 60;
+
 /**
  * Record a failed authentication attempt.
  *
  * We can only attribute failures to an org when the public id resolved to a
  * row, so unknown keys are not logged here — see the note in `audit.ts`.
+ *
+ * Repeats are collapsed: anyone who knows a public id (it is shown in the
+ * dashboard and in logs) could otherwise force one INSERT per request by
+ * sending a wrong secret. The first failure in each window is recorded.
  */
 async function fail(
   row: {
@@ -149,6 +166,19 @@ async function fail(
   event: 'auth_failed' | 'expired',
   reason: string,
 ): Promise<void> {
+  try {
+    const first = await redis.set(
+      `audit:keyfail:${row.id}:${reason}`,
+      '1',
+      'EX',
+      FAILURE_AUDIT_WINDOW_SECONDS,
+      'NX',
+    );
+    if (first !== 'OK') return;
+  } catch {
+    // Without Redis, fall through and record every failure.
+  }
+
   await recordEventSafe({
     keyId: row.id,
     familyId: row.familyId,

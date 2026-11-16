@@ -33,7 +33,7 @@ const SEED_ROUTES: SeedRoute[] = [
     description: 'A paginated catalogue. Accepts `page` and `limit` query parameters.',
     statusCode: 200,
     position: 10,
-    responseHeaders: { 'X-Total-Count': '42' },
+    responseHeaders: { 'X-Total-Count': '3' },
     responseTemplate: {
       data: [
         {
@@ -165,7 +165,9 @@ const SEED_ROUTES: SeedRoute[] = [
     description: 'Accepts a list of product ids and returns the created order.',
     statusCode: 201,
     position: 50,
-    responseHeaders: { Location: '/mock/ecommerce/orders/{{params.id}}' },
+    // Headers are templated too. The id is taken from the request body when
+    // the caller sends one, so Location points at something they recognise.
+    responseHeaders: { Location: '/mock/ecommerce/orders/{{body.id "new"}}' },
     responseTemplate: {
       id: '{{faker.string.uuid}}',
       status: 'pending',
@@ -217,14 +219,26 @@ const SEED_ROUTES: SeedRoute[] = [
   },
 ];
 
+/** Anything that can run the seed queries: the pool, or an open transaction. */
+type Executor = Pick<typeof db, 'select' | 'insert'>;
+
 /**
  * Create the flagship service for an organization, if it does not have one
  * already.
  *
- * Safe to call more than once — a second call is a no-op.
+ * Safe to call more than once — a second call is a no-op. Pass the caller's
+ * transaction so the service and its routes commit together with the org;
+ * without one, the service and route inserts still share a transaction, so
+ * a failure can never leave an empty seeded service that is impossible to
+ * delete and never re-seeded.
  */
-export async function seedFlagshipService(orgId: string): Promise<void> {
-  const [existing] = await db
+export async function seedFlagshipService(orgId: string, executor?: Executor): Promise<void> {
+  if (!executor) {
+    await db.transaction((tx) => seedFlagshipService(orgId, tx));
+    return;
+  }
+
+  const [existing] = await executor
     .select({ id: mockServices.id })
     .from(mockServices)
     .where(and(eq(mockServices.orgId, orgId), eq(mockServices.slug, FLAGSHIP_SLUG)))
@@ -232,7 +246,7 @@ export async function seedFlagshipService(orgId: string): Promise<void> {
 
   if (existing) return;
 
-  const [service] = await db
+  const [service] = await executor
     .insert(mockServices)
     .values({
       orgId,
@@ -247,7 +261,7 @@ export async function seedFlagshipService(orgId: string): Promise<void> {
 
   if (!service) return;
 
-  await db.insert(mockRoutes).values(
+  await executor.insert(mockRoutes).values(
     SEED_ROUTES.map((route) => ({
       serviceId: service.id,
       method: route.method,

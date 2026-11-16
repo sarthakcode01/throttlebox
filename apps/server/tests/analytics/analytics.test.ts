@@ -6,7 +6,12 @@ import {
   setQuotaCheckCallback,
   resetQueueForTesting,
 } from '../../src/analytics/ingest.js';
-import { signPayload, dispatchWebhook, isValidWebhookUrl } from '../../src/analytics/webhooks.js';
+import {
+  signPayload,
+  dispatchWebhook,
+  isValidWebhookUrl,
+  webhookTransport,
+} from '../../src/analytics/webhooks.js';
 import { db } from '../../src/db/client.js';
 import { requestLogs } from '../../src/db/schema.js';
 
@@ -96,11 +101,7 @@ describe('Webhooks & HMAC Signatures', () => {
   });
 
   it('dispatches webhook with required Throttlebox headers', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    const sendMock = vi.spyOn(webhookTransport, 'send').mockResolvedValue({ status: 200 });
 
     const result = await dispatchWebhook(
       { url: 'https://example.com/webhook', secret: 'whsec_secret' },
@@ -110,18 +111,48 @@ describe('Webhooks & HMAC Signatures', () => {
 
     expect(result.success).toBe(true);
     expect(result.statusCode).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledTimes(1);
 
-    const callArgs = fetchMock.mock.calls[0];
+    const callArgs = sendMock.mock.calls[0];
     expect(callArgs).toBeDefined();
     expect(callArgs![0]).toBe('https://example.com/webhook');
-    const headers = (callArgs![1] as RequestInit).headers as Record<string, string>;
+    const headers = callArgs![1].headers;
     expect(headers['X-Throttlebox-Event']).toBe('quota.threshold_reached');
     expect(headers['X-Throttlebox-Signature']).toMatch(/^sha256=[a-f0-9]{64}$/);
     expect(headers['X-Throttlebox-Delivery']).toMatch(/^del_/);
     expect(headers['Content-Type']).toBe('application/json');
 
-    vi.unstubAllGlobals();
+    // The signature covers exactly the bytes that are sent.
+    const signature = headers['X-Throttlebox-Signature']!.replace('sha256=', '');
+    expect(signature).toBe(signPayload('whsec_secret', callArgs![1].body));
+  });
+
+  it('treats a redirect as a failed delivery rather than following it', async () => {
+    vi.spyOn(webhookTransport, 'send').mockResolvedValue({ status: 302 });
+
+    const result = await dispatchWebhook(
+      { url: 'https://example.com/webhook', secret: 'whsec_secret' },
+      'ping',
+      {},
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.statusCode).toBe(302);
+  });
+
+  it('returns a generic error instead of the network failure detail', async () => {
+    vi.spyOn(webhookTransport, 'send').mockRejectedValue(
+      Object.assign(new Error('connect ECONNREFUSED 203.0.113.7:6379'), { code: 'ECONNREFUSED' }),
+    );
+
+    const result = await dispatchWebhook(
+      { url: 'https://example.com/webhook', secret: 'whsec_secret' },
+      'ping',
+      {},
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).not.toMatch(/ECONNREFUSED|6379/);
   });
 
   it('rejects SSRF target addresses including private subnets and cloud metadata', () => {

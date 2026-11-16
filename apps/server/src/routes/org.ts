@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { PLANS, type Plan } from '@throttlebox/shared';
 import { z } from 'zod';
 import { getOrgPlan, updateOrgPlan } from '../ratelimit/tier.js';
+import { getOrgWindowUsage } from '../ratelimit/limiter.js';
 
 const updatePlanSchema = z.object({
   plan: z.enum(PLANS),
@@ -16,7 +17,11 @@ export const orgRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const planConfig = await getOrgPlan(auth.orgId);
-    return reply.send({ plan: planConfig });
+    // Requests counted against the current window, straight from the
+    // limiter's own sorted set, so the dashboard shows real consumption.
+    const used = await getOrgWindowUsage(auth.orgId, planConfig.windowSeconds);
+    const limit = Math.floor(planConfig.requestsPerWindow * planConfig.burstAllowance);
+    return reply.send({ plan: planConfig, usage: { used, limit } });
   });
 
   // PATCH /api/org/plan

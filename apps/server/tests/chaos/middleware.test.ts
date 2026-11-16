@@ -42,9 +42,7 @@ describe('chaosPlugin Fastify preHandler hook', () => {
     const app = Fastify();
     await app.register(chaosPlugin);
 
-    vi.spyOn(cacheModule, 'resolveChaosRule').mockResolvedValue(
-      makeMockRule({ isEnabled: false }),
-    );
+    vi.spyOn(cacheModule, 'resolveChaosRule').mockResolvedValue(makeMockRule({ isEnabled: false }));
 
     app.get('/test', {
       preHandler: [
@@ -201,9 +199,9 @@ describe('chaosPlugin Fastify preHandler hook', () => {
       match: () => null,
     });
 
-    const resolveSpy = vi.spyOn(cacheModule, 'resolveChaosRule').mockResolvedValue(
-      makeMockRule({ isEnabled: false }),
-    );
+    const resolveSpy = vi
+      .spyOn(cacheModule, 'resolveChaosRule')
+      .mockResolvedValue(makeMockRule({ isEnabled: false }));
 
     app.get('/mock/:serviceSlug/*', {
       preHandler: [
@@ -307,16 +305,18 @@ describe('chaosPlugin Fastify preHandler hook', () => {
       isEnabled: false, // specifically disabled for this service
     });
 
-    vi.spyOn(cacheModule.chaosCache, 'getCachedChaosRule').mockImplementation(async (_orgId, sId) => {
-      if (sId === 'srv-1') {
-        return serviceRule;
-      }
-      return makeMockRule({
-        id: 'rule-org',
-        isEnabled: true, // org has chaos enabled
-        errors: { enabled: true, rate5xx: 1.0, rate429: 0.0, statusCodes: [500] },
-      });
-    });
+    vi.spyOn(cacheModule.chaosCache, 'getCachedChaosRule').mockImplementation(
+      async (_orgId, sId) => {
+        if (sId === 'srv-1') {
+          return serviceRule;
+        }
+        return makeMockRule({
+          id: 'rule-org',
+          isEnabled: true, // org has chaos enabled
+          errors: { enabled: true, rate5xx: 1.0, rate429: 0.0, statusCodes: [500] },
+        });
+      },
+    );
 
     const resolved = await cacheModule.resolveChaosRule('org-test', 'srv-1', null);
     expect(resolved).not.toBeNull();

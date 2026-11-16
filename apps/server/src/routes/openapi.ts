@@ -18,8 +18,11 @@ async function resolveOrgId(request: FastifyRequest): Promise<string | null> {
   const raw = extractBearerKey(request);
   if (!raw) return null;
 
+  // Reading the document is a read of the mock API, so it needs the same
+  // scope as calling it.
   const context = await verifyKey(raw);
-  return context?.orgId ?? null;
+  if (!context || !context.scopes.includes('mock:read')) return null;
+  return context.orgId;
 }
 
 /**
@@ -60,6 +63,8 @@ export const openApiRoutes: FastifyPluginAsync = async (fastify) => {
           id: route.id,
           method: route.method,
           path: route.path,
+          summary: route.summary,
+          description: route.description,
           statusCode: route.statusCode,
           responseTemplate: route.responseTemplate,
           responseHeaders: route.responseHeaders,

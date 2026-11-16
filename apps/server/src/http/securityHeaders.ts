@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { isProduction } from '../config.js';
 
 /**
  * Baseline security headers.
@@ -14,6 +15,11 @@ export function registerSecurityHeaders(fastify: FastifyInstance): void {
     reply.header('Referrer-Policy', 'no-referrer');
     reply.header('X-DNS-Prefetch-Control', 'off');
     reply.header('Cross-Origin-Opener-Policy', 'same-origin');
+    // Only over real TLS deployments; HSTS on plain-http localhost would pin
+    // the browser to https for a host that does not serve it.
+    if (isProduction) {
+      reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
     reply.removeHeader('X-Powered-By');
     return payload;
   });

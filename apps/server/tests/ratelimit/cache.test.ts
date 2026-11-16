@@ -1,106 +1,95 @@
-import { describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
 import {
   getCachedKey,
   invalidateCachedKey,
   invalidateCachedKeyById,
   invalidateFamilyKeyCache,
+  isKnownMissingKey,
+  rememberMissingKey,
   setCachedKey,
   type CachedKeyRow,
 } from '../../src/keys/cache.js';
 import { redis } from '../../src/db/redis.js';
 
+/**
+ * The key cache, against the real Redis. These used to mock the pipeline
+ * call by call; asserting on what ends up in Redis is what matters.
+ */
 describe('key caching in Redis', () => {
-  const dummyRow: CachedKeyRow = {
-    id: 'key-123',
-    orgId: 'org-456',
-    familyId: 'fam-789',
-    env: 'test',
-    scopes: ['mock:read'],
-    status: 'active',
-    secretHash: 'abcdef1234567890',
-    expiresAt: null,
-    graceUntil: null,
-    familyRevokedAt: null,
-  };
+  function makeRow(): { publicId: string; row: CachedKeyRow } {
+    const id = randomUUID();
+    return {
+      publicId: `pub${id.slice(0, 8)}`,
+      row: {
+        id,
+        orgId: randomUUID(),
+        familyId: randomUUID(),
+        env: 'test',
+        scopes: ['mock:read'],
+        status: 'active',
+        secretHash: 'abcdef1234567890',
+        expiresAt: null,
+        graceUntil: null,
+        familyRevokedAt: null,
+      },
+    };
+  }
 
-  it('serializes and retrieves cached key', async () => {
-    vi.spyOn(redis, 'get').mockResolvedValueOnce(JSON.stringify(dummyRow));
-
-    const result = await getCachedKey('testpub123');
-    expect(result).toEqual(dummyRow);
-    expect(redis.get).toHaveBeenCalledWith('cache:key:testpub123');
+  it('round-trips a cached row', async () => {
+    const { publicId, row } = makeRow();
+    await setCachedKey(publicId, row, 60);
+    expect(await getCachedKey(publicId)).toEqual(row);
+    expect(await redis.get(`cache:key:id:${row.id}`)).toBe(publicId);
+    expect(await redis.sismember(`cache:family:${row.familyId}:keys`, publicId)).toBe(1);
   });
 
   it('returns null on cache miss', async () => {
-    vi.spyOn(redis, 'get').mockResolvedValueOnce(null);
-
-    const result = await getCachedKey('nonexistent');
-    expect(result).toBeNull();
+    expect(await getCachedKey(`missing-${randomUUID()}`)).toBeNull();
   });
 
-  it('sets cache using a pipeline', async () => {
-    const pipelineMock = {
-      setex: vi.fn().mockReturnThis(),
-      sadd: vi.fn().mockReturnThis(),
-      expire: vi.fn().mockReturnThis(),
-      exec: vi.fn().mockResolvedValue([]),
-    };
-    vi.spyOn(redis, 'pipeline').mockReturnValue(
-      pipelineMock as unknown as ReturnType<typeof redis.pipeline>,
-    );
-
-    await setCachedKey('testpub123', dummyRow, 60);
-
-    expect(pipelineMock.setex).toHaveBeenCalledWith(
-      'cache:key:testpub123',
-      60,
-      JSON.stringify(dummyRow),
-    );
-    expect(pipelineMock.setex).toHaveBeenCalledWith('cache:key:id:key-123', 60, 'testpub123');
-    expect(pipelineMock.sadd).toHaveBeenCalledWith('cache:family:fam-789:keys', 'testpub123');
-    expect(pipelineMock.exec).toHaveBeenCalled();
+  it('invalidates by publicId', async () => {
+    const { publicId, row } = makeRow();
+    await setCachedKey(publicId, row, 60);
+    await invalidateCachedKey(publicId);
+    expect(await getCachedKey(publicId)).toBeNull();
   });
 
-  it('invalidates key cache by publicId', async () => {
-    vi.spyOn(redis, 'del').mockResolvedValueOnce(1);
-
-    await invalidateCachedKey('testpub123');
-    expect(redis.del).toHaveBeenCalledWith('cache:key:testpub123');
+  it('invalidates by keyId', async () => {
+    const { publicId, row } = makeRow();
+    await setCachedKey(publicId, row, 60);
+    await invalidateCachedKeyById(row.id);
+    expect(await getCachedKey(publicId)).toBeNull();
+    expect(await redis.get(`cache:key:id:${row.id}`)).toBeNull();
   });
 
-  it('invalidates key cache by keyId', async () => {
-    vi.spyOn(redis, 'get').mockResolvedValueOnce('testpub123');
-    const pipelineMock = {
-      del: vi.fn().mockReturnThis(),
-      exec: vi.fn().mockResolvedValue([]),
-    };
-    vi.spyOn(redis, 'pipeline').mockReturnValue(
-      pipelineMock as unknown as ReturnType<typeof redis.pipeline>,
-    );
+  it('invalidates a whole family', async () => {
+    const first = makeRow();
+    const second = makeRow();
+    second.row.familyId = first.row.familyId;
+    await setCachedKey(first.publicId, first.row, 60);
+    await setCachedKey(second.publicId, second.row, 60);
 
-    await invalidateCachedKeyById('key-123');
-    expect(pipelineMock.del).toHaveBeenCalledWith('cache:key:id:key-123');
-    expect(pipelineMock.del).toHaveBeenCalledWith('cache:key:testpub123');
-    expect(pipelineMock.exec).toHaveBeenCalled();
+    await invalidateFamilyKeyCache(first.row.familyId);
+
+    expect(await getCachedKey(first.publicId)).toBeNull();
+    expect(await getCachedKey(second.publicId)).toBeNull();
   });
 
-  it('invalidates whole family key cache', async () => {
-    vi.spyOn(redis, 'smembers').mockResolvedValueOnce([
-      'key-pub-1',
-      'key-pub-2',
-    ] as unknown as string[]);
-    const pipelineMock = {
-      del: vi.fn().mockReturnThis(),
-      exec: vi.fn().mockResolvedValue([]),
-    };
-    vi.spyOn(redis, 'pipeline').mockReturnValue(
-      pipelineMock as unknown as ReturnType<typeof redis.pipeline>,
-    );
+  it('refuses to write a row back over a fresh invalidation', async () => {
+    // The revoke race: a verification read the row just before the revoke,
+    // and writes it to the cache just after the revoke cleared it. The
+    // tombstone left by the invalidation must win.
+    const { publicId, row } = makeRow();
+    await invalidateCachedKey(publicId);
+    await setCachedKey(publicId, row, 60);
+    expect(await getCachedKey(publicId)).toBeNull();
+  });
 
-    await invalidateFamilyKeyCache('fam-789');
-    expect(pipelineMock.del).toHaveBeenCalledWith('cache:key:key-pub-1');
-    expect(pipelineMock.del).toHaveBeenCalledWith('cache:key:key-pub-2');
-    expect(pipelineMock.del).toHaveBeenCalledWith('cache:family:fam-789:keys');
-    expect(pipelineMock.exec).toHaveBeenCalled();
+  it('remembers unknown public ids briefly', async () => {
+    const publicId = `unknown${randomUUID().slice(0, 8)}`;
+    expect(await isKnownMissingKey(publicId)).toBe(false);
+    await rememberMissingKey(publicId);
+    expect(await isKnownMissingKey(publicId)).toBe(true);
   });
 });

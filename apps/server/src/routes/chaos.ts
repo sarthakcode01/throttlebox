@@ -1,23 +1,12 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import type {
-  ChaosBenchmarkResult,
-  ChaosRuleConfig,
-} from '@throttlebox/shared';
+import type { ChaosBenchmarkResult, ChaosRuleConfig } from '@throttlebox/shared';
 import { db } from '../db/client.js';
 import { apiKeys, chaosRules, mockServices } from '../db/schema.js';
 import { getServiceBySlug } from '../mock/services.js';
-import {
-  invalidateChaosRule,
-  resolveChaosRule,
-  toChaosRuleConfig,
-} from '../chaos/cache.js';
-import {
-  sampleLatency,
-  shouldDropSocket,
-  shouldInjectError,
-} from '../chaos/sampling.js';
+import { invalidateChaosRule, resolveChaosRule, toChaosRuleConfig } from '../chaos/cache.js';
+import { sampleLatency, shouldDropSocket, shouldInjectError } from '../chaos/sampling.js';
 
 const latencySchema = z
   .object({
@@ -42,8 +31,20 @@ const errorsSchema = z.object({
   enabled: z.boolean(),
   rate5xx: z.number().min(0).max(1.0).default(0),
   rate429: z.number().min(0).max(1.0).default(0),
-  statusCodes: z.array(z.number().int()).default([500, 502, 503, 504]),
-  customMessage: z.string().max(500).optional(),
+  // Server-error codes only. Any integer used to be accepted, and a value
+  // outside 100–599 made `reply.code()` throw — the "injected fault" became
+  // a real 500 — while 200 made a fault indistinguishable from success.
+  statusCodes: z
+    .array(z.number().int().min(500).max(599))
+    .min(1)
+    .max(20)
+    .default([500, 502, 503, 504]),
+  // An empty message means "use the default" — store it as absent.
+  customMessage: z
+    .string()
+    .max(500)
+    .optional()
+    .transform((value) => (value && value.trim().length > 0 ? value : undefined)),
 });
 
 const partitionSchema = z.object({
@@ -81,10 +82,7 @@ export const chaosRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const orgId = request.auth!.orgId!;
 
-      const rows = await db
-        .select()
-        .from(chaosRules)
-        .where(eq(chaosRules.orgId, orgId));
+      const rows = await db.select().from(chaosRules).where(eq(chaosRules.orgId, orgId));
 
       const rules = rows.map(toChaosRuleConfig);
 
@@ -213,6 +211,27 @@ export const chaosRoutes: FastifyPluginAsync = async (fastify) => {
         }
         saved = toChaosRuleConfig(updated);
       } else {
+        // Insert, or update if a concurrent request created the same scope
+        // first. Each scope has exactly one row (see the partial unique
+        // indexes), so a lost race used to surface as a 500.
+        const scopeTarget =
+          !serviceId && !keyId
+            ? {
+                target: [chaosRules.orgId],
+                where: sql`${chaosRules.serviceId} IS NULL AND ${chaosRules.keyId} IS NULL`,
+              }
+            : serviceId && !keyId
+              ? {
+                  target: [chaosRules.orgId, chaosRules.serviceId],
+                  where: sql`${chaosRules.keyId} IS NULL AND ${chaosRules.serviceId} IS NOT NULL`,
+                }
+              : !serviceId && keyId
+                ? {
+                    target: [chaosRules.orgId, chaosRules.keyId],
+                    where: sql`${chaosRules.serviceId} IS NULL AND ${chaosRules.keyId} IS NOT NULL`,
+                  }
+                : { target: [chaosRules.orgId, chaosRules.serviceId, chaosRules.keyId] };
+
         const [inserted] = await db
           .insert(chaosRules)
           .values({
@@ -223,6 +242,11 @@ export const chaosRoutes: FastifyPluginAsync = async (fastify) => {
             latency,
             errors,
             partition,
+          })
+          .onConflictDoUpdate({
+            target: scopeTarget.target,
+            ...(scopeTarget.where ? { targetWhere: scopeTarget.where } : {}),
+            set: { isEnabled, latency, errors, partition, updatedAt: new Date() },
           })
           .returning();
 

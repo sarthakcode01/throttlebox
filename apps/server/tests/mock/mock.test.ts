@@ -109,9 +109,12 @@ describe('openapi generation', () => {
 
     expect(document.openapi).toBe('3.1.0');
     expect(document.servers[0]?.url).toBe('http://localhost:3001/mock/ecommerce');
-    expect(Object.keys(document.paths)).toEqual(['/products/:id']);
+    // OpenAPI path templates use `{id}`, not the router's `:id`.
+    expect(Object.keys(document.paths)).toEqual(['/products/{id}']);
+    // Every operation requires the bearer key.
+    expect(document.security).toEqual([{ bearerAuth: [] }]);
 
-    const operation = document.paths['/products/:id']?.get as {
+    const operation = document.paths['/products/{id}']?.get as {
       parameters: { name: string; in: string }[];
     };
     expect(operation.parameters[0]).toMatchObject({ name: 'id', in: 'path', required: true });

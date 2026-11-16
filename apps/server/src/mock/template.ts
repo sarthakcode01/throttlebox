@@ -72,6 +72,97 @@ const FORBIDDEN_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
 /** Deepest path we will walk. Stops pathological expressions. */
 const MAX_PATH_DEPTH = 6;
 
+/**
+ * Resource limits for one render.
+ *
+ * Rendering is synchronous, so an expensive template blocks the whole event
+ * loop — every tenant, every health check. `{{faker.string.alpha 20000000}}`
+ * froze the server for 21 seconds. Three bounds close that:
+ *
+ *  - numeric arguments that act as sizes or counts are clamped;
+ *  - a template may evaluate a bounded number of expressions;
+ *  - once a render has produced a bounded amount of text, the remaining
+ *    expressions resolve to nothing.
+ */
+export const MAX_SIZE_ARGUMENT = 256;
+export const MAX_EXPRESSIONS_PER_RENDER = 1_000;
+export const MAX_RENDERED_CHARS = 256 * 1024;
+
+/**
+ * Faker functions whose numeric arguments are values, not sizes —
+ * `number.int max=10000` is a range, not a length. Their arguments pass
+ * through, except a named `count`, which is a size everywhere.
+ */
+const VALUE_ARGUMENT_PREFIXES = ['faker.number.', 'faker.date.', 'faker.location.'];
+const VALUE_ARGUMENT_FUNCTIONS = new Set(['faker.finance.amount', 'faker.commerce.price']);
+
+function takesValueArguments(path: string): boolean {
+  return (
+    VALUE_ARGUMENT_FUNCTIONS.has(path) ||
+    VALUE_ARGUMENT_PREFIXES.some((prefix) => path.startsWith(prefix))
+  );
+}
+
+function clampSize(value: number): number {
+  return Math.max(-MAX_SIZE_ARGUMENT, Math.min(MAX_SIZE_ARGUMENT, value));
+}
+
+/** Make the arguments of a faker call safe to pass. */
+function boundArguments(path: string, args: unknown[]): unknown[] {
+  const valueArgs = takesValueArguments(path);
+
+  return args.map((arg) => {
+    if (typeof arg === 'number') return valueArgs ? arg : clampSize(arg);
+    if (arg && typeof arg === 'object') {
+      const bounded: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(arg)) {
+        bounded[key] =
+          typeof value === 'number' && (!valueArgs || key === 'count') ? clampSize(value) : value;
+      }
+      return bounded;
+    }
+    return arg;
+  });
+}
+
+interface RenderBudget {
+  expressions: number;
+  chars: number;
+}
+
+/**
+ * Per-render accounting, kept off the context object so a template cannot
+ * read it with `{{...}}`.
+ */
+const budgets = new WeakMap<TemplateContext, RenderBudget>();
+
+function budgetFor(context: TemplateContext): RenderBudget {
+  let budget = budgets.get(context);
+  if (!budget) {
+    budget = { expressions: 0, chars: 0 };
+    budgets.set(context, budget);
+  }
+  return budget;
+}
+
+function exhausted(budget: RenderBudget): boolean {
+  return budget.expressions > MAX_EXPRESSIONS_PER_RENDER || budget.chars > MAX_RENDERED_CHARS;
+}
+
+/** Count what a resolved value adds to the response. */
+function charge(budget: RenderBudget, value: unknown): unknown {
+  if (typeof value === 'string') {
+    budget.chars += value.length;
+  } else if (value !== null && typeof value === 'object') {
+    try {
+      budget.chars += JSON.stringify(value)?.length ?? 0;
+    } catch {
+      // Circular faker output is serialized safely later; count it as small.
+    }
+  }
+  return exhausted(budget) ? undefined : value;
+}
+
 /** How far back a generated timestamp can be. Keeps `{{now}}` plausible. */
 const RECENT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -227,6 +318,14 @@ function parseArgs(tokens: string[]): unknown[] {
  * Resolve one expression body — the text between `{{` and `}}`.
  */
 function resolveExpression(context: TemplateContext, expression: string): unknown {
+  const budget = budgetFor(context);
+  budget.expressions += 1;
+  if (exhausted(budget)) return undefined;
+
+  return charge(budget, evaluateExpression(context, expression));
+}
+
+function evaluateExpression(context: TemplateContext, expression: string): unknown {
   const tokens = expression.split(/\s+/).filter(Boolean);
   const path = tokens[0];
   if (path === undefined) return undefined;
@@ -254,7 +353,7 @@ function resolveExpression(context: TemplateContext, expression: string): unknow
   if (!path.startsWith('faker.')) return undefined;
 
   try {
-    const args = parseArgs(rest);
+    const args = boundArguments(path, parseArgs(rest));
     return (resolved as (...a: unknown[]) => unknown)(...args);
   } catch {
     return undefined;
@@ -289,6 +388,10 @@ function renderString(template: string, context: TemplateContext): unknown {
  * literals.
  */
 export function renderTemplate(template: unknown, context: TemplateContext): unknown {
+  // A huge template can be expensive with no expressions at all, just by
+  // being walked. Stop once the budget is spent.
+  if (exhausted(budgetFor(context))) return undefined;
+
   if (typeof template === 'string') {
     return renderString(template, context);
   }

@@ -1,6 +1,6 @@
 import type { FastifyError, FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
-import { isProduction } from '../config.js';
+import { config } from '../config.js';
 
 /**
  * A single place where unexpected errors become responses.
@@ -10,9 +10,22 @@ import { isProduction } from '../config.js';
  * statement that failed. That is a small information leak and a confusing
  * message, so unexpected errors are replaced with a generic one and the
  * detail goes to the log.
+ *
+ * Detail is only exposed when `EXPOSE_ERROR_DETAILS=true` is set explicitly.
+ * Inferring it from NODE_ENV meant any environment not named exactly
+ * "production" leaked database errors.
  */
 export function registerErrorHandler(fastify: FastifyInstance): void {
   fastify.setErrorHandler((error: FastifyError, request, reply) => {
+    // A schema parse that escaped a route is still the caller's mistake.
+    if (isValidationError(error)) {
+      void reply.code(400).send({
+        error: 'validation_error',
+        message: error.issues[0]?.message ?? 'Invalid input',
+      });
+      return;
+    }
+
     // Errors we raised deliberately carry a status code and are safe to show.
     const status = error.statusCode ?? 500;
 
@@ -28,8 +41,9 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
 
     void reply.code(500).send({
       error: 'internal_error',
-      // The detail is deliberately withheld outside development.
-      message: isProduction ? 'Something went wrong' : error.message || 'Something went wrong',
+      message: config.EXPOSE_ERROR_DETAILS
+        ? error.message || 'Something went wrong'
+        : 'Something went wrong',
     });
   });
 }

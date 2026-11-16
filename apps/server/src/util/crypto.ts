@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 /**
  * Compare two hex digests in constant time.
@@ -20,15 +20,15 @@ export function safeEqualHex(a: string, b: string): boolean {
 /**
  * Compare two arbitrary strings in constant time.
  *
- * Used for the CSRF double-submit check, where both values are fixed-length
- * tokens but are not necessarily hex.
+ * Both sides are hashed to a fixed 32 bytes first, so the comparison time
+ * does not depend on, and therefore does not reveal, either input's length.
+ * Used for the CSRF double-submit check.
  */
 export function safeEqualString(a: string, b: string): boolean {
-  const expected = Buffer.from(a, 'utf8');
-  const actual = Buffer.from(b, 'utf8');
+  if (a.length === 0 || b.length === 0) return false;
 
-  if (expected.length !== actual.length) return false;
-  if (expected.length === 0) return false;
+  const expected = createHash('sha256').update(a, 'utf8').digest();
+  const actual = createHash('sha256').update(b, 'utf8').digest();
 
   return timingSafeEqual(expected, actual);
 }

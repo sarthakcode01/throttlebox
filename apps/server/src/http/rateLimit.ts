@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { checkRateLimit } from '../ratelimit/limiter.js';
 
 export interface RateLimitOptions {
   /** How many requests are allowed inside the window. */
@@ -20,60 +21,71 @@ interface Bucket {
 export interface RateLimiter {
   /** Fastify `preHandler` hook. */
   handler: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
-  /** Forget every bucket. Used by tests. */
+  /** Forget every local fallback bucket. Used by tests. */
   reset: () => void;
-  /** Number of live buckets. Used by tests. */
+  /** Number of live local fallback buckets. Used by tests. */
   size: () => number;
 }
 
 /**
- * A fixed-window rate limiter, held in process memory.
+ * A sliding-window rate limiter for the dashboard and credential endpoints.
  *
- * This exists to protect the authentication endpoints from credential
- * stuffing and registration spam. It is deliberately simple and local — the
- * real per-key sliding-window limiter for the mock API is Phase 4, and that
- * one is Redis-backed so it works across instances.
+ * The count lives in Redis, using the same atomic Lua script as the mock
+ * API limiter, so every instance shares one budget. A per-process limiter
+ * gave an N-instance deployment N times the limit, which is exactly what
+ * credential stuffing wants.
  *
- * The trade-off is explicit: this limiter is per-process, so a multi-instance
- * deployment gets N times the limit. That is acceptable for a credential
- * stuffing defence (an attacker still cannot spread attempts across
- * instances efficiently) but it is not a substitute for the Phase 4 limiter.
+ * If Redis is unreachable the limiter does not fail open. It falls back to
+ * a fixed window held in process memory, which is weaker across instances
+ * but still a ceiling on Argon2id work during an outage.
  */
 export function createRateLimit(options: RateLimitOptions): RateLimiter {
-  const buckets = new Map<string, Bucket>();
+  const fallbackBuckets = new Map<string, Bucket>();
   const { max, windowMs, keyGenerator, message } = options;
+  const windowSeconds = Math.max(1, Math.ceil(windowMs / 1000));
+
+  function checkLocally(key: string, now: number) {
+    if (fallbackBuckets.size > 10_000) {
+      for (const [existingKey, bucket] of fallbackBuckets) {
+        if (bucket.resetAt <= now) fallbackBuckets.delete(existingKey);
+      }
+    }
+
+    let bucket = fallbackBuckets.get(key);
+    if (!bucket || bucket.resetAt <= now) {
+      bucket = { count: 0, resetAt: now + windowMs };
+      fallbackBuckets.set(key, bucket);
+    }
+    bucket.count += 1;
+
+    return {
+      allowed: bucket.count <= max,
+      remaining: Math.max(0, max - bucket.count),
+      resetAt: Math.ceil(bucket.resetAt / 1000),
+      retryAfter: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)),
+    };
+  }
 
   async function handler(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     if (options.enabled === false) return;
 
-    const now = Date.now();
     const key = keyGenerator(request);
+    let decision = await checkRateLimit({
+      bucketKey: `ratelimit:${key}`,
+      limit: max,
+      windowSeconds,
+    });
 
-    // Opportunistically drop expired buckets so the map cannot grow without
-    // bound. Cheap enough to do inline at this scale.
-    if (buckets.size > 10_000) {
-      for (const [existingKey, bucket] of buckets) {
-        if (bucket.resetAt <= now) buckets.delete(existingKey);
-      }
+    if (decision.degraded) {
+      decision = { ...decision, ...checkLocally(key, Date.now()) };
     }
-
-    let bucket = buckets.get(key);
-    if (!bucket || bucket.resetAt <= now) {
-      bucket = { count: 0, resetAt: now + windowMs };
-      buckets.set(key, bucket);
-    }
-
-    bucket.count += 1;
-
-    const remaining = Math.max(0, max - bucket.count);
-    const retryAfter = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
 
     reply.header('X-RateLimit-Limit', String(max));
-    reply.header('X-RateLimit-Remaining', String(remaining));
-    reply.header('X-RateLimit-Reset', String(Math.ceil(bucket.resetAt / 1000)));
+    reply.header('X-RateLimit-Remaining', String(decision.remaining));
+    reply.header('X-RateLimit-Reset', String(decision.resetAt));
 
-    if (bucket.count > max) {
-      reply.header('Retry-After', String(retryAfter));
+    if (!decision.allowed) {
+      reply.header('Retry-After', String(decision.retryAfter ?? 1));
       await reply
         .code(429)
         .send({ error: 'rate_limited', message: message ?? 'Too many requests' });
@@ -82,7 +94,7 @@ export function createRateLimit(options: RateLimitOptions): RateLimiter {
 
   return {
     handler,
-    reset: () => buckets.clear(),
-    size: () => buckets.size,
+    reset: () => fallbackBuckets.clear(),
+    size: () => fallbackBuckets.size,
   };
 }

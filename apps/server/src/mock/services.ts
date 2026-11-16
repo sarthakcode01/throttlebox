@@ -11,7 +11,13 @@ import type {
   MockRouteSummary,
   MockServiceSummary,
 } from '@throttlebox/shared';
-import { buildServiceRouter, type RouteDefinition, type ServiceRouter } from './router.js';
+import {
+  buildServiceRouter,
+  normalizePath,
+  routePathError,
+  type RouteDefinition,
+  type ServiceRouter,
+} from './router.js';
 
 export class MockError extends Error {
   constructor(
@@ -24,31 +30,55 @@ export class MockError extends Error {
 }
 
 /**
- * Built routers, keyed by service id.
+ * Built routers, keyed by `orgId:slug` — the shape of an incoming request.
  *
- * Rebuilding a router is cheap (a handful of routes), but doing it on every
- * request would still mean a query per request. The cache is invalidated
- * whenever a service's routes change, so an edit is visible immediately.
+ * The cache used to be keyed by service id, which meant every request still
+ * ran a Postgres query to turn the slug into an id before it could look the
+ * router up, and the chaos hook and the handler each did it again. Keyed by
+ * slug, a warm request touches no database at all.
+ *
+ * Entries are invalidated whenever a service or its routes change, and also
+ * expire, so a missed pub/sub message cannot leave a stale router forever.
  */
-const routerCache = new Map<string, ServiceRouter>();
+interface CachedRouter {
+  router: ServiceRouter;
+  expiresAt: number;
+}
+
+const ROUTER_CACHE_TTL_MS = 60_000;
+const routerCache = new Map<string, CachedRouter>();
 const ROUTER_INVALIDATE_CHANNEL = 'router:invalidated';
 let routerSubscriberRedis: Redis | null = null;
 
+/**
+ * Bumped on every invalidation. A lookup that started before an
+ * invalidation must not write its (possibly stale) router back afterwards —
+ * without this, a read racing an edit could pin the old routes in the cache.
+ */
+let routerGeneration = 0;
+
+function routerCacheKey(orgId: string, slug: string): string {
+  return `${orgId}:${slug}`;
+}
+
 export function invalidateRouterCache(serviceId?: string, broadcast = true): void {
+  routerGeneration += 1;
+
   if (serviceId) {
-    routerCache.delete(serviceId);
+    for (const [key, entry] of routerCache) {
+      if (entry.router.serviceId === serviceId) routerCache.delete(key);
+    }
   } else {
     routerCache.clear();
   }
 
   if (broadcast) {
     try {
-      void redis.publish(
-        ROUTER_INVALIDATE_CHANNEL,
-        JSON.stringify({ serviceId: serviceId ?? null }),
-      ).catch((err) => {
-        console.warn('[mock:pubsub] Failed to publish router invalidation:', err);
-      });
+      void redis
+        .publish(ROUTER_INVALIDATE_CHANNEL, JSON.stringify({ serviceId: serviceId ?? null }))
+        .catch((err) => {
+          console.warn('[mock:pubsub] Failed to publish router invalidation:', err);
+        });
     } catch (err) {
       console.warn('[mock:pubsub] Failed to broadcast router invalidation:', err);
     }
@@ -211,15 +241,24 @@ export async function createService(
     throw new MockError('duplicate', `A service with the slug "${slug}" already exists`);
   }
 
-  const [row] = await db
-    .insert(mockServices)
-    .values({
-      orgId,
-      name: input.name,
-      slug,
-      description: input.description ?? '',
-    })
-    .returning();
+  let row: typeof mockServices.$inferSelect | undefined;
+  try {
+    [row] = await db
+      .insert(mockServices)
+      .values({
+        orgId,
+        name: input.name,
+        slug,
+        description: input.description ?? '',
+      })
+      .returning();
+  } catch (err) {
+    // A concurrent create took the slug between the check and the insert.
+    if (isUniqueViolation(err)) {
+      throw new MockError('duplicate', `A service with the slug "${slug}" already exists`);
+    }
+    throw err;
+  }
 
   if (!row) throw new MockError('invalid', 'Failed to create the service');
   return toServiceSummary(row, 0);
@@ -234,23 +273,39 @@ export async function updateService(
   if (!existing) throw new MockError('not_found', 'Service not found');
 
   const slug = input.slug ? slugify(input.slug) : existing.slug;
+  // `createService` refuses a name that slugifies to nothing; an update
+  // must too, or the service ends up with an empty, unreachable slug.
+  if (!slug) {
+    throw new MockError('invalid', 'A service needs a slug with at least one letter or digit');
+  }
   if (slug !== existing.slug) {
     const clash = await getServiceBySlug(orgId, slug);
     if (clash) throw new MockError('duplicate', `A service with the slug "${slug}" already exists`);
   }
 
-  const [row] = await db
-    .update(mockServices)
-    .set({
-      name: input.name ?? existing.name,
-      slug,
-      description: input.description ?? existing.description,
-      updatedAt: new Date(),
-    })
-    .where(eq(mockServices.id, id))
-    .returning();
+  let row: typeof mockServices.$inferSelect | undefined;
+  try {
+    [row] = await db
+      .update(mockServices)
+      .set({
+        name: input.name ?? existing.name,
+        slug,
+        description: input.description ?? existing.description,
+        updatedAt: new Date(),
+      })
+      .where(eq(mockServices.id, id))
+      .returning();
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new MockError('duplicate', `A service with the slug "${slug}" already exists`);
+    }
+    throw err;
+  }
 
   if (!row) throw new MockError('not_found', 'Service not found');
+
+  // The cache is keyed by slug, so a rename must drop the old entry.
+  invalidateRouterCache(id);
 
   const routes = await listRoutes(orgId, id);
   return toServiceSummary(row, routes.length);
@@ -306,17 +361,48 @@ async function routeDefinitions(serviceId: string): Promise<RouteDefinition[]> {
  * change, so an edit takes effect on the next request.
  */
 export async function getServiceRouter(orgId: string, slug: string): Promise<ServiceRouter | null> {
+  const key = routerCacheKey(orgId, slug);
+  const cached = routerCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.router;
+
+  const generation = routerGeneration;
+
   const service = await getServiceBySlug(orgId, slug);
   if (!service) return null;
 
-  const cached = routerCache.get(service.id);
-  if (cached) return cached;
-
   const definitions = await routeDefinitions(service.id);
   const router = buildServiceRouter(service.id, definitions);
-  routerCache.set(service.id, router);
+
+  if (generation === routerGeneration) {
+    routerCache.set(key, { router, expiresAt: Date.now() + ROUTER_CACHE_TTL_MS });
+  }
 
   return router;
+}
+
+/** Validate and normalise a route path before it is stored. */
+function prepareRoutePath(method: string, rawPath: string): string {
+  const trimmed = rawPath.trim();
+  if (!trimmed.startsWith('/')) {
+    throw new MockError('invalid', 'A route path must start with "/"');
+  }
+
+  // Store the same form the router matches on. Uniqueness used to be
+  // checked on the raw path, so `/products` and `/products/` were both
+  // accepted — and then collided inside the router.
+  const path = normalizePath(trimmed);
+  const problem = routePathError(method, path);
+  if (problem) {
+    throw new MockError('invalid', `Invalid route path: ${problem}`);
+  }
+  return path;
+}
+
+/** Postgres unique-violation SQLSTATE. */
+const UNIQUE_VIOLATION = '23505';
+
+function isUniqueViolation(err: unknown): boolean {
+  return (err as { code?: string }).code === UNIQUE_VIOLATION;
 }
 
 export async function createRoute(
@@ -327,10 +413,7 @@ export async function createRoute(
   const service = await getServiceById(orgId, serviceId);
   if (!service) throw new MockError('not_found', 'Service not found');
 
-  const path = input.path.trim();
-  if (!path.startsWith('/')) {
-    throw new MockError('invalid', 'A route path must start with "/"');
-  }
+  const path = prepareRoutePath(input.method, input.path);
 
   const existing = await db
     .select({ id: mockRoutes.id })
@@ -348,30 +431,35 @@ export async function createRoute(
     throw new MockError('duplicate', `${input.method} ${path} already exists on this service`);
   }
 
-  const [row] = await db
-    .insert(mockRoutes)
-    .values({
-      serviceId,
-      method: input.method as HttpMethod,
-      path,
-      summary: input.summary ?? '',
-      description: input.description ?? '',
-      statusCode: input.statusCode ?? 200,
-      responseTemplate: input.responseTemplate ?? {},
-      responseHeaders: input.responseHeaders ?? {},
-      latencyMs: input.latencyMs ?? 0,
-      isActive: input.isActive ?? true,
-    })
-    .returning();
+  let row: typeof mockRoutes.$inferSelect | undefined;
+  try {
+    [row] = await db
+      .insert(mockRoutes)
+      .values({
+        serviceId,
+        method: input.method as HttpMethod,
+        path,
+        summary: input.summary ?? '',
+        description: input.description ?? '',
+        statusCode: input.statusCode ?? 200,
+        responseTemplate: input.responseTemplate ?? {},
+        responseHeaders: input.responseHeaders ?? {},
+        latencyMs: input.latencyMs ?? 0,
+        isActive: input.isActive ?? true,
+      })
+      .returning();
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new MockError('duplicate', `${input.method} ${path} already exists on this service`);
+    }
+    throw err;
+  }
 
   if (!row) throw new MockError('invalid', 'Failed to create the route');
 
   invalidateRouterCache(serviceId);
   return toRouteSummary(row);
 }
-
-/** Postgres unique-violation SQLSTATE. */
-const UNIQUE_VIOLATION = '23505';
 
 /**
  * Update a route.
@@ -398,7 +486,7 @@ export async function updateRoute(
   const route = existing.mock_routes;
 
   const method = input.method ?? route.method;
-  const path = input.path?.trim() ?? route.path;
+  const path = input.path === undefined ? route.path : prepareRoutePath(method, input.path);
 
   if (method !== route.method || path !== route.path) {
     const clash = await db
@@ -440,7 +528,7 @@ export async function updateRoute(
       .where(eq(mockRoutes.id, routeId))
       .returning();
   } catch (err) {
-    if ((err as { code?: string }).code === UNIQUE_VIOLATION) {
+    if (isUniqueViolation(err)) {
       throw new MockError('duplicate', `${method} ${path} already exists on this service`);
     }
     throw err;

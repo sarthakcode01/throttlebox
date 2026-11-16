@@ -1,6 +1,17 @@
+import { readFileSync } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { sql } from '../db/client.js';
 import { redis } from '../db/redis.js';
+
+/** The version from package.json, so the probe cannot drift from the release. */
+const VERSION = (() => {
+  try {
+    const raw = readFileSync(new URL('../../package.json', import.meta.url), 'utf8');
+    return (JSON.parse(raw) as { version?: string }).version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 
 /**
  * Liveness and readiness probes.
@@ -18,7 +29,7 @@ export async function registerHealthRoutes(fastify: FastifyInstance): Promise<vo
   fastify.get('/health', async () => ({
     ok: true,
     timestamp: new Date().toISOString(),
-    version: '0.1.0',
+    version: VERSION,
   }));
 
   fastify.get('/health/ready', async (_request, reply) => {

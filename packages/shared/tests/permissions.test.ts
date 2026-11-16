@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PERMISSIONS, PLAN_LIMITS, roleHasPermission } from '../src/index.js';
+import { PERMISSIONS, PLAN_CONFIGS, roleHasPermission } from '../src/index.js';
 
 describe('roleHasPermission', () => {
   it('grants everything to owners', () => {
@@ -40,9 +40,11 @@ describe('roleHasPermission', () => {
   });
 });
 
-describe('PLAN_LIMITS', () => {
+// PLAN_LIMITS was a second copy of the same numbers; PLAN_CONFIGS is the one
+// the server uses.
+describe('PLAN_CONFIGS', () => {
   it('defines a limit for every plan', () => {
-    expect(Object.keys(PLAN_LIMITS).sort()).toEqual(['free', 'pro']);
+    expect(Object.keys(PLAN_CONFIGS).sort()).toEqual(['free', 'pro']);
   });
 });
 

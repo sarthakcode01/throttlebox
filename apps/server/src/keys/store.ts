@@ -10,7 +10,12 @@ import { db } from '../db/client.js';
 import { apiKeyFamilies, apiKeys } from '../db/schema.js';
 import { recordEvent } from './audit.js';
 import { generateKeyMaterial, hashSecret } from './generate.js';
-import { invalidateCachedKey, invalidateCachedKeyById, invalidateFamilyKeyCache } from './cache.js';
+import {
+  forgetMissingKey,
+  invalidateCachedKey,
+  invalidateFamilyKeyCache,
+  invalidateKeys,
+} from './cache.js';
 
 /** How long a superseded key keeps working after a rotation. */
 export const DEFAULT_GRACE_HOURS = 24;
@@ -198,6 +203,8 @@ export async function createKey(input: CreateKeyInput): Promise<StoredKeyResult>
     metadata: { name: input.name, env: input.env, scopes },
   });
 
+  await forgetMissingKey(material.publicId);
+
   return {
     id: result.id,
     familyId: result.familyId,
@@ -246,50 +253,83 @@ export async function rotateKey(input: RotateKeyInput): Promise<StoredKeyResult>
     throw new KeyStoreError('invalid_grace', 'graceHours must be between 0 and 720');
   }
 
-  const [existing] = await db
-    .select()
-    .from(apiKeys)
-    .where(and(eq(apiKeys.id, input.keyId), eq(apiKeys.orgId, input.orgId)))
-    .limit(1);
-
-  if (!existing) {
-    throw new KeyStoreError('not_found', 'API key not found');
-  }
-  if (existing.status === 'revoked') {
-    throw new KeyStoreError('already_revoked', 'API key is already revoked');
-  }
-
-  const oldScopes = normalizeScopes(existing.scopes);
-  const scopes = input.scopes ? normalizeScopes(input.scopes) : oldScopes;
-
-  if (!isSuperset(scopes, oldScopes)) {
-    throw new KeyStoreError(
-      'invalid_scopes',
-      `Rotated key must keep every scope of the current key (${oldScopes.join(', ')})`,
-    );
-  }
-
-  const material = generateKeyMaterial(existing.env);
-  const secretHash = hashSecret(material.publicId, material.secret);
   const graceUntil = new Date(Date.now() + graceHours * 60 * 60 * 1000);
 
-  const result = await db.transaction(async (tx) => {
+  const { result, existing, scopes, retiredPublicIds, key } = await db.transaction(async (tx) => {
+    // Lock the family first. Two concurrent rotations used to each mint a
+    // successor and each retire "every current key except mine" — but
+    // neither could see the other's uncommitted successor, so the family
+    // ended up with two current keys. Serialising on the family row makes
+    // the second rotation see the first one's result.
+    const [target] = await tx
+      .select({ familyId: apiKeys.familyId })
+      .from(apiKeys)
+      .where(and(eq(apiKeys.id, input.keyId), eq(apiKeys.orgId, input.orgId)))
+      .limit(1);
+
+    if (!target) {
+      throw new KeyStoreError('not_found', 'API key not found');
+    }
+
+    await tx
+      .select({ id: apiKeyFamilies.id })
+      .from(apiKeyFamilies)
+      .where(eq(apiKeyFamilies.id, target.familyId))
+      .for('update');
+
+    // Re-read under the lock; the row may have changed while we waited.
+    const [current] = await tx
+      .select()
+      .from(apiKeys)
+      .where(and(eq(apiKeys.id, input.keyId), eq(apiKeys.orgId, input.orgId)))
+      .limit(1);
+
+    if (!current) {
+      throw new KeyStoreError('not_found', 'API key not found');
+    }
+    if (current.status === 'revoked') {
+      throw new KeyStoreError('already_revoked', 'API key is already revoked');
+    }
+    // Rotating a key that was already superseded is allowed on purpose:
+    // the new key becomes the family's current key and every other
+    // current key is retired below. The lock above is what keeps that to
+    // exactly one current key when rotations run concurrently.
+    //
+    // The successor inherits the expiry, so an expired key would produce
+    // a key that is dead on arrival.
+    if (current.expiresAt && current.expiresAt <= new Date()) {
+      throw new KeyStoreError('invalid_expiry', 'An expired key cannot be rotated');
+    }
+
+    const oldScopes = normalizeScopes(current.scopes);
+    const nextScopes = input.scopes ? normalizeScopes(input.scopes) : oldScopes;
+
+    if (!isSuperset(nextScopes, oldScopes)) {
+      throw new KeyStoreError(
+        'invalid_scopes',
+        `Rotated key must keep every scope of the current key (${oldScopes.join(', ')})`,
+      );
+    }
+
+    const keyMaterial = generateKeyMaterial(current.env);
+    const hash = hashSecret(keyMaterial.publicId, keyMaterial.secret);
+
     const [row] = await tx
       .insert(apiKeys)
       .values({
-        orgId: existing.orgId,
-        familyId: existing.familyId,
-        name: existing.name,
-        publicId: material.publicId,
-        prefix: material.prefix,
-        secretHash,
-        last4: material.last4,
-        env: existing.env,
-        scopes,
+        orgId: current.orgId,
+        familyId: current.familyId,
+        name: current.name,
+        publicId: keyMaterial.publicId,
+        prefix: keyMaterial.prefix,
+        secretHash: hash,
+        last4: keyMaterial.last4,
+        env: current.env,
+        scopes: nextScopes,
         status: 'active',
-        expiresAt: existing.expiresAt,
-        rotatedFrom: existing.id,
-        createdBy: existing.createdBy,
+        expiresAt: current.expiresAt,
+        rotatedFrom: current.id,
+        createdBy: current.createdBy,
       })
       .returning({
         id: apiKeys.id,
@@ -299,27 +339,29 @@ export async function rotateKey(input: RotateKeyInput): Promise<StoredKeyResult>
 
     if (!row) throw new Error('Failed to create rotated api key');
 
-    // Retire every *current* key in the family except the one we just minted.
-    //
-    // A key is "current" when it has no grace window. The naive version of
-    // this — only setting `grace_until` on the key that was rotated — breaks
-    // when the same key is rotated twice: the first successor becomes an
-    // orphan that is still marked current, and it would keep working forever.
-    //
-    // A family must have at most one current key at a time.
-    await tx
+    // Retire every *current* key in the family except the one we just
+    // minted. A key is "current" when it has no grace window, and a family
+    // must have at most one current key at a time.
+    const retired = await tx
       .update(apiKeys)
       .set({ graceUntil })
       .where(
         and(
-          eq(apiKeys.familyId, existing.familyId),
+          eq(apiKeys.familyId, current.familyId),
           eq(apiKeys.status, 'active'),
           isNull(apiKeys.graceUntil),
           ne(apiKeys.id, row.id),
         ),
-      );
+      )
+      .returning({ publicId: apiKeys.publicId });
 
-    return row;
+    return {
+      result: row,
+      existing: current,
+      scopes: nextScopes,
+      retiredPublicIds: retired.map((r) => r.publicId),
+      key: keyMaterial,
+    };
   });
 
   await recordEvent({
@@ -333,27 +375,36 @@ export async function rotateKey(input: RotateKeyInput): Promise<StoredKeyResult>
     metadata: { previousKeyId: existing.id, graceUntil: graceUntil.toISOString(), scopes },
   });
 
+  // Every key whose grace window just changed must be re-read from Postgres.
   await invalidateCachedKey(existing.publicId);
-  await invalidateFamilyKeyCache(existing.familyId);
+  await invalidatePublicIds(retiredPublicIds);
+  await forgetMissingKey(key.publicId);
 
   return {
     id: result.id,
     familyId: result.familyId,
-    key: material.key,
-    prefix: material.prefix,
-    last4: material.last4,
+    key: key.key,
+    prefix: key.prefix,
+    last4: key.last4,
     env: existing.env,
     scopes,
     expiresAt: result.expiresAt,
   };
 }
 
+/** Invalidate cached rows, logging rather than failing an already-committed change. */
+async function invalidatePublicIds(publicIds: string[]): Promise<void> {
+  try {
+    await invalidateKeys(publicIds);
+  } catch (err) {
+    console.error('[keys] cache invalidation failed; affected keys refresh within 60s:', err);
+  }
+}
+
 /**
  * Revoke a single key. Immediate and authoritative: the row is the source of
- * truth, so there is no cache to invalidate yet.
- *
- * (Phase 4 adds a Redis cache on the lookup path and must purge it here, or a
- * revoked key stays live for up to the cache TTL.)
+ * truth, and the cached copy is tombstoned so a verification racing with the
+ * revoke cannot write the old row back.
  */
 export async function revokeKey(
   orgId: string,
@@ -391,8 +442,7 @@ export async function revokeKey(
     userAgent: context.userAgent,
   });
 
-  await invalidateCachedKey(row.publicId);
-  await invalidateCachedKeyById(row.id);
+  await invalidatePublicIds([row.publicId]);
 }
 
 /**
@@ -410,7 +460,7 @@ export async function revokeFamily(
     userAgent?: string | undefined;
   } = {},
 ): Promise<number> {
-  const revoked = await db.transaction(async (tx) => {
+  const revokedPublicIds = await db.transaction(async (tx) => {
     const [family] = await tx
       .update(apiKeyFamilies)
       .set({ revokedAt: new Date() })
@@ -431,10 +481,11 @@ export async function revokeFamily(
       .update(apiKeys)
       .set({ status: 'revoked', revokedAt: new Date() })
       .where(and(eq(apiKeys.familyId, familyId), eq(apiKeys.status, 'active')))
-      .returning({ id: apiKeys.id });
+      .returning({ publicId: apiKeys.publicId });
 
-    return updated.length;
+    return updated.map((key) => key.publicId);
   });
+  const revoked = revokedPublicIds.length;
 
   await recordEvent({
     keyId: null,
@@ -447,6 +498,9 @@ export async function revokeFamily(
     metadata: { keysRevoked: revoked },
   });
 
+  // Tombstone each revoked key by id rather than relying on the family's
+  // cache index, which only lists keys that happened to be cached.
+  await invalidatePublicIds(revokedPublicIds);
   await invalidateFamilyKeyCache(familyId);
 
   return revoked;

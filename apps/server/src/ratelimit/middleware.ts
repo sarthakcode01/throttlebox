@@ -28,6 +28,8 @@ export const rateLimitPlugin = fp(async (fastify) => {
     const plan = await getOrgPlan(auth.orgId);
     const effectiveLimit = Math.floor(plan.requestsPerWindow * plan.burstAllowance);
 
+    // One bucket per organization: the plan quota belongs to the org, so
+    // every key in it draws on the same budget.
     const result = await checkRateLimit({
       orgId: auth.orgId,
       keyId: auth.keyId,
@@ -41,6 +43,9 @@ export const rateLimitPlugin = fp(async (fastify) => {
     reply.header('X-RateLimit-Reset', String(result.resetAt));
 
     if (!result.allowed) {
+      // Analytics counts this as real throttling. A 429 injected by the
+      // chaos engine does not set it, so the two are never mixed up.
+      request.rateLimited = true;
       const retryAfter = result.retryAfter ?? 1;
       reply.header('Retry-After', String(retryAfter));
       return reply.code(429).send({

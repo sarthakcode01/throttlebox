@@ -19,6 +19,62 @@ const serviceSchema = z.object({
   description: z.string().max(500).optional(),
 });
 
+/** RFC 9110 `token`: what a header field name may contain. */
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+/**
+ * Headers a mock route may not set. Framing headers corrupt the response;
+ * `Set-Cookie` and the CORS and HSTS headers would let a mock act on the
+ * API's own origin — including overwriting the dashboard session cookie.
+ */
+const FORBIDDEN_HEADERS = new Set([
+  'connection',
+  'content-length',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'set-cookie',
+  'strict-transport-security',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
+const responseHeadersSchema = z
+  .record(
+    z
+      .string()
+      .max(200)
+      // Control characters (CR/LF above all) make Node refuse the header,
+      // which turned every request to the route into a 500.
+      .refine(
+        (value) =>
+          [...value].every((char) => {
+            const code = char.charCodeAt(0);
+            // Tab is allowed; every other C0 control and DEL is not.
+            return code === 0x09 || (code >= 0x20 && code !== 0x7f);
+          }),
+        'Header values cannot contain control characters',
+      ),
+  )
+  .superRefine((headers, ctx) => {
+    for (const name of Object.keys(headers)) {
+      const lower = name.toLowerCase();
+      if (!HEADER_NAME.test(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `"${name}" is not a valid header name`,
+        });
+      } else if (FORBIDDEN_HEADERS.has(lower) || lower.startsWith('access-control-')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `A mock route cannot set the "${name}" header`,
+        });
+      }
+    }
+  });
+
 const routeSchema = z.object({
   method: z.enum(HTTP_METHODS),
   path: z.string().min(1).max(300).regex(/^\//, 'A route path must start with "/"'),
@@ -26,7 +82,7 @@ const routeSchema = z.object({
   description: z.string().max(2000).optional(),
   statusCode: z.number().int().min(100).max(599).optional(),
   responseTemplate: z.unknown().optional(),
-  responseHeaders: z.record(z.string().max(200)).optional(),
+  responseHeaders: responseHeadersSchema.optional(),
   latencyMs: z.number().int().min(0).max(30_000).optional(),
   isActive: z.boolean().optional(),
 });

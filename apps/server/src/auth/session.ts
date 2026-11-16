@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { db } from '../db/client.js';
 import { redis } from '../db/redis.js';
 import { sessions } from '../db/schema.js';
+import { createHash } from 'node:crypto';
 import { generateSessionToken, hashSessionToken } from './token.js';
 
 export const SESSION_COOKIE = 'throttlebox_session';
@@ -13,6 +14,24 @@ export interface SessionRecord {
   sessionId: string;
   orgId?: string | null;
   role?: string | null;
+  /**
+   * Absolute expiry, epoch milliseconds. The Redis TTL slides on use, so
+   * without this an actively used token would never expire.
+   */
+  expiresAt?: number;
+  /** When `orgId`/`role` were last read from `org_members`, epoch ms. */
+  membershipCheckedAt?: number;
+  /** SHA-256 of the User-Agent the session was created with. */
+  userAgentHash?: string | null;
+}
+
+export function hashUserAgent(userAgent: string | undefined): string | null {
+  return userAgent ? createHash('sha256').update(userAgent).digest('hex') : null;
+}
+
+/** Seconds left before an absolute expiry, never less than 1. */
+function secondsUntil(expiresAtMs: number, nowMs: number): number {
+  return Math.max(1, Math.floor((expiresAtMs - nowMs) / 1000));
 }
 
 function redisKey(tokenHash: string): string {
@@ -68,6 +87,11 @@ export async function createSession(input: CreateSessionInput): Promise<CreatedS
     sessionId: row.id,
     orgId: input.orgId ?? null,
     role: input.role ?? null,
+    expiresAt: expiresAt.getTime(),
+    // Only a caller that looked the membership up can vouch for it. Without
+    // one, the middleware reads it on first use.
+    ...(input.orgId !== undefined ? { membershipCheckedAt: Date.now() } : {}),
+    userAgentHash: hashUserAgent(input.userAgent),
   };
   await redis.set(redisKey(tokenHash), JSON.stringify(record), 'EX', config.SESSION_TTL_SECONDS);
 
@@ -76,10 +100,16 @@ export async function createSession(input: CreateSessionInput): Promise<CreatedS
 
 /**
  * Updates an active session cache in Redis (e.g. warming cached orgId and role).
+ *
+ * The TTL is capped at the session's absolute expiry, so a rewrite can never
+ * extend its life.
  */
 export async function updateSessionRecord(token: string, record: SessionRecord): Promise<void> {
   const tokenHash = hashSessionToken(token);
-  await redis.set(redisKey(tokenHash), JSON.stringify(record), 'EX', config.SESSION_TTL_SECONDS);
+  const ttl = record.expiresAt
+    ? Math.min(config.SESSION_TTL_SECONDS, secondsUntil(record.expiresAt, Date.now()))
+    : config.SESSION_TTL_SECONDS;
+  await redis.set(redisKey(tokenHash), JSON.stringify(record), 'EX', ttl);
 }
 
 /**
@@ -94,8 +124,24 @@ export async function resolveSession(token: string): Promise<SessionRecord | nul
 
   const cached = await redis.get(redisKey(tokenHash));
   if (cached) {
-    await redis.expire(redisKey(tokenHash), config.SESSION_TTL_SECONDS);
-    return JSON.parse(cached) as SessionRecord;
+    const record = JSON.parse(cached) as SessionRecord;
+    const nowMs = Date.now();
+
+    // The sliding TTL keeps an idle-timeout, but the absolute expiry is
+    // what ends the session. A record without one predates this check;
+    // the durable row below still has the real expiry.
+    if (record.expiresAt !== undefined) {
+      if (record.expiresAt <= nowMs) {
+        await redis.del(redisKey(tokenHash));
+        return null;
+      }
+      await redis.expire(
+        redisKey(tokenHash),
+        Math.min(config.SESSION_TTL_SECONDS, secondsUntil(record.expiresAt, nowMs)),
+      );
+      return record;
+    }
+    await redis.del(redisKey(tokenHash));
   }
 
   // Cache miss — fall back to the durable record.
@@ -105,6 +151,7 @@ export async function resolveSession(token: string): Promise<SessionRecord | nul
       id: sessions.id,
       userId: sessions.userId,
       expiresAt: sessions.expiresAt,
+      userAgent: sessions.userAgent,
     })
     .from(sessions)
     .where(and(eq(sessions.tokenHash, tokenHash), gt(sessions.expiresAt, now)))
@@ -114,18 +161,20 @@ export async function resolveSession(token: string): Promise<SessionRecord | nul
     return null;
   }
 
-  const record: SessionRecord = { userId: row.userId, sessionId: row.id };
+  // No membership here: the auth middleware reads it fresh on first use.
+  const record: SessionRecord = {
+    userId: row.userId,
+    sessionId: row.id,
+    expiresAt: row.expiresAt.getTime(),
+    userAgentHash: hashUserAgent(row.userAgent ?? undefined),
+  };
 
   // Re-warm the cache, but never beyond the session's real expiry.
-  const remainingSeconds = Math.max(
-    1,
-    Math.floor((row.expiresAt.getTime() - now.getTime()) / 1000),
-  );
   await redis.set(
     redisKey(tokenHash),
     JSON.stringify(record),
     'EX',
-    Math.min(config.SESSION_TTL_SECONDS, remainingSeconds),
+    Math.min(config.SESSION_TTL_SECONDS, secondsUntil(row.expiresAt.getTime(), now.getTime())),
   );
 
   return record;

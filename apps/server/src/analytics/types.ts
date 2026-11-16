@@ -20,7 +20,11 @@ export interface AnalyticsFilter {
   serviceId?: string;
 }
 
-export function parseRangeToInterval(range: TimeRange = '24h'): { interval: string; bucket: string; since: Date } {
+export function parseRangeToInterval(range: TimeRange = '24h'): {
+  interval: string;
+  bucket: string;
+  since: Date;
+} {
   const now = new Date();
   switch (range) {
     case '1h':

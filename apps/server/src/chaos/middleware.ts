@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
+import { recordMockRequest, STATUS_CONNECTION_DROPPED } from '../analytics/telemetry.js';
 import { getServiceRouter } from '../mock/services.js';
 import { resolveChaosRule } from './cache.js';
 import { sampleLatency, shouldDropSocket, shouldInjectError } from './sampling.js';
@@ -42,8 +43,7 @@ export const chaosPlugin = fp(async (fastify) => {
       return;
     }
 
-    const reqExt = request as unknown as { mockServiceId?: string };
-    let serviceId = reqExt.mockServiceId ?? null;
+    let serviceId = request.mockServiceId ?? null;
 
     // Resolve serviceId from route parameters if not already pre-populated
     if (!serviceId) {
@@ -57,7 +57,7 @@ export const chaosPlugin = fp(async (fastify) => {
           return;
         }
         serviceId = router.serviceId;
-        reqExt.mockServiceId = serviceId;
+        request.mockServiceId = serviceId;
       }
     }
 
@@ -78,6 +78,12 @@ export const chaosPlugin = fp(async (fastify) => {
         { orgId: auth.orgId, serviceId, keyId: auth.keyId },
         '[Chaos] Terminating connection abruptly (simulated partition drop)',
       );
+      // A dropped connection never produces a response, so `onResponse`
+      // never fires for it. Log it here, or the dashboard shows 0% drops no
+      // matter what the drop rate is.
+      await recordMockRequest(request, reply, STATUS_CONNECTION_DROPPED).catch((err) => {
+        request.log.warn({ err }, '[Chaos] Failed to record dropped request');
+      });
       reply.hijack();
       request.raw.destroy();
       return;
@@ -89,8 +95,10 @@ export const chaosPlugin = fp(async (fastify) => {
       reply.header('X-Throttlebox-Chaos-Latency', `${delayMs}ms`);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
 
-      // If the client aborted/closed the socket during artificial delay, abort immediately
+      // The client hung up during the delay. Take the reply over so the
+      // handler does not go on to render a response for a dead socket.
       if (request.raw.destroyed) {
+        reply.hijack();
         return;
       }
     }
@@ -105,8 +113,9 @@ export const chaosPlugin = fp(async (fastify) => {
         reply.header('Retry-After', '5');
         return reply.code(429).send({
           error: 'simulated_rate_limit',
+          // `||`, not `??`: an empty custom message means "use the default".
           message:
-            rule.errors.customMessage ??
+            rule.errors.customMessage ||
             'Too Many Requests (Simulated by Throttlebox Chaos Engine)',
         });
       }
@@ -114,7 +123,7 @@ export const chaosPlugin = fp(async (fastify) => {
       return reply.code(status).send({
         error: 'chaos_fault_injected',
         statusCode: status,
-        message: rule.errors.customMessage ?? getStandardErrorMessage(status),
+        message: rule.errors.customMessage || getStandardErrorMessage(status),
         timestamp: new Date().toISOString(),
       });
     }

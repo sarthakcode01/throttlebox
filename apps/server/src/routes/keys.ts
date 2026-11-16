@@ -31,9 +31,9 @@ const paramsSchema = z.object({
 /**
  * Map a store error onto an HTTP status.
  *
- * `not_found` is a 404. `already_revoked` and `duplicate_idempotency_key` are
- * conflicts — the request was well formed but conflicts with the current
- * state. Everything else is a bad request.
+ * `not_found` is a 404. `already_revoked` and `duplicate_idempotency_key`
+ * are conflicts — the request was well formed but
+ * conflicts with the current state. Everything else is a bad request.
  */
 function keyErrorStatus(code: KeyStoreError['code']): number {
   switch (code) {

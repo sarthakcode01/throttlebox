@@ -5,10 +5,33 @@ export interface OpenApiDocument {
   openapi: string;
   info: { title: string; version: string; description?: string };
   servers: { url: string; description?: string }[];
+  security: Record<string, string[]>[];
   paths: Record<string, Record<string, unknown>>;
   components: {
     securitySchemes: Record<string, unknown>;
   };
+}
+
+/** A route as the document needs it: the router definition plus its docs. */
+export type DocumentedRoute = RouteDefinition & { summary?: string; description?: string };
+
+/**
+ * Convert a router path to an OpenAPI path template.
+ *
+ * The router uses `/products/:id`; OpenAPI uses `/products/{id}`. Emitting
+ * the router form produced a document whose path parameters did not appear
+ * in any path, which Stoplight, Postman and SDK generators all mishandle.
+ * A regex constraint (`:id(\d+)`) is dropped — OpenAPI has no place for it.
+ */
+export function toOpenApiPath(path: string): string {
+  return path
+    .split('/')
+    .map((segment) => {
+      if (!segment.startsWith(':') || segment.length < 2) return segment;
+      const name = segment.slice(1).split('(')[0] ?? '';
+      return name ? `{${name}}` : segment;
+    })
+    .join('/');
 }
 
 /**
@@ -36,13 +59,15 @@ export function buildOpenApiDocument(input: {
   serviceSlug: string;
   description?: string;
   baseUrl: string;
-  routes: RouteDefinition[];
+  routes: DocumentedRoute[];
 }): OpenApiDocument {
   const paths: Record<string, Record<string, unknown>> = {};
 
   for (const route of input.routes) {
     const operation: Record<string, unknown> = {
-      summary: route.path,
+      // The author's own summary, falling back to the path.
+      summary: route.summary || route.path,
+      ...(route.description ? { description: route.description } : {}),
       operationId: `${route.method.toLowerCase()}${route.path.replace(/[^A-Za-z0-9]+/g, '_')}`,
       tags: [input.serviceSlug],
       responses: {
@@ -82,7 +107,8 @@ export function buildOpenApiDocument(input: {
     }
 
     const method = route.method.toLowerCase();
-    paths[route.path] = { ...(paths[route.path] ?? {}), [method]: operation };
+    const openApiPath = toOpenApiPath(route.path);
+    paths[openApiPath] = { ...(paths[openApiPath] ?? {}), [method]: operation };
   }
 
   return {
@@ -93,6 +119,9 @@ export function buildOpenApiDocument(input: {
       ...(input.description ? { description: input.description } : {}),
     },
     servers: [{ url: `${input.baseUrl}/mock/${input.serviceSlug}`, description: 'Mock base URL' }],
+    // Every operation needs the key. Defining the scheme without requiring
+    // it meant generated clients never sent the Authorization header.
+    security: [{ bearerAuth: [] }],
     paths,
     components: {
       securitySchemes: {

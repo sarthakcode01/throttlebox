@@ -54,6 +54,21 @@ export function normalizePath(path: string): string {
  * The route definition travels with the handler as find-my-way's `store`, so
  * a match returns the definition and the path parameters together.
  */
+/**
+ * Check that `find-my-way` accepts a path, so a bad route is rejected when it
+ * is saved rather than discovered on the first request.
+ *
+ * Returns an error message, or null when the path is usable.
+ */
+export function routePathError(method: string, path: string): string | null {
+  try {
+    Router().on(method as HttpMethod, normalizePath(path), () => {});
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : 'Invalid route path';
+  }
+}
+
 export function buildServiceRouter(serviceId: string, routes: RouteDefinition[]): ServiceRouter {
   const router = Router();
   const definitions: RouteDefinition[] = [];
@@ -61,16 +76,29 @@ export function buildServiceRouter(serviceId: string, routes: RouteDefinition[])
   for (const route of routes) {
     const path = normalizePath(route.path);
     const definition: RouteDefinition = { ...route, path };
-    definitions.push(definition);
 
-    router.on(
-      route.method,
-      path,
-      () => {
-        // The matcher is what matters; the definition comes back via `store`.
-      },
-      definition,
-    );
+    // `find-my-way` throws on a duplicate (`/products` and `/products/`
+    // normalise to the same path) or a pattern it cannot parse. Letting that
+    // escape made every request to the whole service a 500. The first route
+    // wins — routes arrive in position order — and the rest are skipped.
+    try {
+      router.on(
+        route.method,
+        path,
+        () => {
+          // The matcher is what matters; the definition comes back via `store`.
+        },
+        definition,
+      );
+    } catch (err) {
+      console.warn(
+        `[mock] skipping route ${route.method} ${route.path} on service ${serviceId}:`,
+        err instanceof Error ? err.message : err,
+      );
+      continue;
+    }
+
+    definitions.push(definition);
   }
 
   return {

@@ -61,9 +61,10 @@ export function sampleLatency(config?: ChaosLatencyConfig | null): number {
         uMin = minFloor;
         uMax = config.maxMs;
       } else {
-        const halfWidth = config.stddevMs > 0
-          ? Math.round(Math.sqrt(3) * config.stddevMs)
-          : Math.round(config.meanMs);
+        const halfWidth =
+          config.stddevMs > 0
+            ? Math.round(Math.sqrt(3) * config.stddevMs)
+            : Math.round(config.meanMs);
         uMin = Math.max(minFloor, config.meanMs - halfWidth);
         uMax = Math.min(maxCeiling, config.meanMs + halfWidth);
       }
@@ -99,16 +100,24 @@ export function shouldInjectError(config?: ChaosErrorConfig | null): ErrorInject
     return { inject: false };
   }
 
-  // 1. Check 429 rate limit simulation
-  if (config.rate429 > 0 && Math.random() < Math.min(1.0, config.rate429)) {
+  // One draw, compared against two adjacent bands: [0, rate429) is a 429 and
+  // [rate429, rate429 + rate5xx) is a 5xx. Two independent draws made the
+  // real 5xx rate rate5xx × (1 − rate429) — 5% configured came out as 4.5%
+  // whenever a 429 rate was also set. If the two rates add up to more than
+  // 1, the 429 band is honoured first and the 5xx band gets the remainder.
+  const rate429 = Math.max(0, Math.min(1.0, config.rate429));
+  const rate5xx = Math.max(0, Math.min(1.0, config.rate5xx));
+  const roll = Math.random();
+
+  if (rate429 > 0 && roll < rate429) {
     return { inject: true, statusCode: 429, is429: true };
   }
 
-  // 2. Check 5xx server error simulation
-  if (config.rate5xx > 0 && Math.random() < Math.min(1.0, config.rate5xx)) {
-    const codes = config.statusCodes && config.statusCodes.length > 0
-      ? config.statusCodes
-      : [500, 502, 503, 504];
+  if (rate5xx > 0 && roll < rate429 + rate5xx) {
+    const codes =
+      config.statusCodes && config.statusCodes.length > 0
+        ? config.statusCodes
+        : [500, 502, 503, 504];
     const picked = codes[Math.floor(Math.random() * codes.length)] ?? 500;
     return { inject: true, statusCode: picked, is429: false };
   }

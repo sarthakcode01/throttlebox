@@ -1,12 +1,17 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { recordRequestLog } from '../analytics/ingest.js';
+import {
+  markRequestStart,
+  recordMockRequest,
+  STATUS_CLIENT_CLOSED,
+} from '../analytics/telemetry.js';
 import { getServiceRouter } from '../mock/services.js';
 import {
   createTemplateContext,
   renderTemplate,
   safeStringify,
   seedFrom,
+  type TemplateContext,
 } from '../mock/template.js';
 
 /**
@@ -22,6 +27,8 @@ import {
  */
 
 const MOCK_URL = '/mock/:serviceSlug/*';
+/** The service root, `/mock/ecommerce`, which the wildcard route does not match. */
+const MOCK_ROOT_URL = '/mock/:serviceSlug';
 
 /**
  * Methods that only read.
@@ -31,6 +38,32 @@ const MOCK_URL = '/mock/:serviceSlug/*';
 const READ_METHODS = ['GET'] as const;
 /** Methods that change something. */
 const WRITE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'] as const;
+
+/**
+ * Request headers a template may never read.
+ *
+ * `{{headers.authorization}}` echoed the caller's API key into the response
+ * body, and in the dashboard preview `{{headers.cookie}}` rendered the
+ * signed-in user's httpOnly session token into JSON that page script could
+ * read.
+ */
+const SECRET_HEADERS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'cookie',
+  'x-csrf-token',
+  'x-api-key',
+]);
+
+function templateHeaders(request: FastifyRequest): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (SECRET_HEADERS.has(name.toLowerCase())) continue;
+    if (typeof value === 'string') headers[name] = value;
+    else if (Array.isArray(value)) headers[name] = value.join(', ');
+  }
+  return headers;
+}
 
 function sleep(ms: number): Promise<void> {
   if (ms <= 0) return Promise.resolve();
@@ -88,6 +121,41 @@ function mockParams(request: FastifyRequest): MockParams {
   return { serviceSlug, remaining: remaining || '/' };
 }
 
+/** Plain string query parameters, from a parsed query object. */
+function stringQuery(raw: unknown): Record<string, string> {
+  const query: Record<string, string> = {};
+  for (const [key, value] of Object.entries((raw ?? {}) as Record<string, unknown>)) {
+    if (typeof value === 'string') query[key] = value;
+  }
+  return query;
+}
+
+/**
+ * A canonical query string for the seed: sorted, so `?a=1&b=2` and
+ * `?b=2&a=1` are the same resource. Empty when there is no query, so a
+ * request without one keeps the seed it always had.
+ */
+function canonicalQuery(query: Record<string, string>): string {
+  return Object.keys(query)
+    .sort()
+    .map((key) => `${key}=${query[key]}`)
+    .join('&');
+}
+
+/** Render header values as templates, so `Location: /orders/{{params.id}}` works. */
+function renderHeaders(
+  headers: Record<string, string>,
+  context: TemplateContext,
+): Record<string, string> {
+  const rendered: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const output = renderTemplate(value, context);
+    if (output === undefined || output === null) continue;
+    rendered[name] = typeof output === 'object' ? JSON.stringify(output) : String(output);
+  }
+  return rendered;
+}
+
 /**
  * Render a mock response.
  *
@@ -110,7 +178,15 @@ async function renderMockResponse(
 
   const params = mockParams(request);
   const serviceSlug = options.preview ? options.preview.serviceSlug : params.serviceSlug;
-  const remaining = options.preview ? options.preview.path : params.remaining;
+
+  // The preview takes the query string as part of the path it is given.
+  let remaining = options.preview ? options.preview.path : params.remaining;
+  let query = stringQuery(request.query);
+  if (options.preview) {
+    const [pathPart, queryPart] = remaining.split('?', 2);
+    remaining = pathPart ?? '/';
+    query = queryPart ? Object.fromEntries(new URLSearchParams(queryPart)) : {};
+  }
 
   const router = await getServiceRouter(auth.orgId, serviceSlug);
   if (!router) {
@@ -126,7 +202,7 @@ async function renderMockResponse(
     };
   }
 
-  (request as unknown as { mockServiceId?: string }).mockServiceId = router.serviceId;
+  request.mockServiceId = router.serviceId;
 
   const method = (options.preview ? options.preview.method : request.method).toUpperCase();
   const path = remaining.startsWith('/') ? remaining : `/${remaining}`;
@@ -151,16 +227,12 @@ async function renderMockResponse(
     };
   }
 
-  const query: Record<string, string> = {};
-  for (const [key, value] of Object.entries(request.query ?? {})) {
-    if (typeof value === 'string') query[key] = value;
-  }
-
+  const queryKey = canonicalQuery(query);
   const context = createTemplateContext({
     params: match.params,
     query,
     body: options.preview ? options.preview.body : request.body,
-    headers: request.headers as Record<string, string>,
+    headers: templateHeaders(request),
     // Deterministic, and scoped to the *organization* rather than the key.
     //
     // The mock data belongs to the service, not to the credential: two keys
@@ -168,7 +240,12 @@ async function renderMockResponse(
     // resource" would change depending on which key called it. Scoping by
     // organization also means the dashboard preview renders exactly what a
     // caller receives, because both sides derive the same seed.
-    seed: seedFrom(auth.orgId, serviceSlug, method, path),
+    //
+    // The query string is part of the resource: `?page=2` used to return
+    // exactly the same products as page 1.
+    seed: queryKey
+      ? seedFrom(auth.orgId, serviceSlug, method, path, queryKey)
+      : seedFrom(auth.orgId, serviceSlug, method, path),
   });
 
   const rendered = renderTemplate(match.route.responseTemplate, context);
@@ -176,7 +253,7 @@ async function renderMockResponse(
 
   return {
     statusCode: match.route.statusCode,
-    headers: match.route.responseHeaders ?? {},
+    headers: renderHeaders(match.route.responseHeaders ?? {}, context),
     body,
     matched: `${match.route.method} ${match.route.path}`,
     latencyMs: match.route.latencyMs,
@@ -184,10 +261,13 @@ async function renderMockResponse(
 }
 
 export const mockRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.addHook('onRequest', async (request) => {
+    markRequestStart(request);
+  });
+
   fastify.addHook('onResponse', async (request, reply) => {
     try {
-      const auth = request.keyAuth;
-      if (!auth) {
+      if (!request.keyAuth) {
         if (reply.statusCode === 401) {
           request.log.warn(
             {
@@ -202,82 +282,63 @@ export const mockRoutes: FastifyPluginAsync = async (fastify) => {
         return;
       }
 
-      const latencyMs = Math.round(reply.elapsedTime);
-      const rateLimited = reply.statusCode === 429;
-      const traceId = (request.id as string) || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const reqExt = request as unknown as { mockServiceId?: string };
-      let serviceId = reqExt.mockServiceId ?? null;
-
-      if (!serviceId) {
-        try {
-          const p = mockParams(request);
-          if (p.serviceSlug) {
-            const r = await getServiceRouter(auth.orgId, p.serviceSlug);
-            serviceId = r?.serviceId ?? null;
-          }
-        } catch (err) {
-          request.log.warn({ err }, 'Failed to resolve serviceId for telemetry');
-        }
-      }
-
-      const rawPath = request.raw.url?.split('?')[0] ?? request.url;
-
-      recordRequestLog({
-        keyId: auth.keyId,
-        orgId: auth.orgId,
-        serviceId,
-        method: request.method.toUpperCase(),
-        path: rawPath,
-        statusCode: reply.statusCode,
-        latencyMs,
-        rateLimited,
-        traceId,
-      });
+      await recordMockRequest(request, reply, reply.statusCode);
     } catch (err) {
       request.log.warn({ err }, 'Unexpected error in onResponse telemetry hook');
+    }
+  });
+
+  // A client that hangs up before the response is sent never reaches
+  // `onResponse`, so without this it was missing from analytics entirely.
+  fastify.addHook('onRequestAbort', async (request) => {
+    try {
+      await recordMockRequest(request, null, STATUS_CLIENT_CLOSED);
+    } catch (err) {
+      request.log.warn({ err }, 'Failed to record aborted mock request');
     }
   });
 
   const handler = async (request: FastifyRequest, reply: FastifyReply) => {
     const result = await renderMockResponse(request, {});
 
+    let hasContentType = false;
     for (const [name, value] of Object.entries(result.headers)) {
-      reply.header(name, value);
+      try {
+        reply.header(name, value);
+        if (name.toLowerCase() === 'content-type') hasContentType = true;
+      } catch (err) {
+        // A header stored before validation existed: skip it rather than
+        // failing the whole response.
+        request.log.warn({ err, header: name }, 'Skipping invalid mock response header');
+      }
     }
 
     if (result.latencyMs > 0) {
       await sleep(result.latencyMs);
     }
 
-    return reply.code(result.statusCode).type('application/json').send(result.body);
+    // A route that declares its own Content-Type keeps it.
+    if (!hasContentType) reply.type('application/json');
+    return reply.code(result.statusCode).send(result.body);
   };
 
+  const pipeline = (scope: 'mock:read' | 'mock:write') => [
+    fastify.requireKeyAuth,
+    fastify.requireScope(scope),
+    fastify.rateLimitMock,
+    fastify.chaosEngine,
+  ];
+
   for (const method of READ_METHODS) {
-    fastify.route({
-      method,
-      url: MOCK_URL,
-      preHandler: [
-        fastify.requireKeyAuth,
-        fastify.requireScope('mock:read'),
-        fastify.rateLimitMock,
-        fastify.chaosEngine,
-      ],
-      handler,
-    });
+    for (const url of [MOCK_URL, MOCK_ROOT_URL]) {
+      fastify.route({ method, url, preHandler: pipeline('mock:read'), handler });
+    }
   }
 
   for (const method of WRITE_METHODS) {
-    fastify.route({
-      method,
-      url: MOCK_URL,
-      preHandler: [
-        fastify.requireKeyAuth,
-        fastify.requireScope('mock:write'),
-        fastify.rateLimitMock,
-        fastify.chaosEngine,
-      ],
-      handler,
-    });
+    for (const url of [MOCK_URL, MOCK_ROOT_URL]) {
+      fastify.route({ method, url, preHandler: pipeline('mock:write'), handler });
+    }
   }
 };
 

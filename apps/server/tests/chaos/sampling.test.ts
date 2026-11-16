@@ -65,7 +65,9 @@ describe('Chaos Sampling & Mathematical Distributions', () => {
   describe('sampleLatency with configuration', () => {
     it('returns 0 when latency is disabled or config is null', () => {
       expect(sampleLatency(null)).toBe(0);
-      expect(sampleLatency({ enabled: false, distribution: 'normal', meanMs: 200, stddevMs: 50 })).toBe(0);
+      expect(
+        sampleLatency({ enabled: false, distribution: 'normal', meanMs: 200, stddevMs: 50 }),
+      ).toBe(0);
     });
 
     it('samples fixed latency correctly', () => {

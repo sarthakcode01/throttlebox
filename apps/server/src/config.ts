@@ -48,6 +48,70 @@ const schema = z.object({
    */
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
 
+  /**
+   * Addresses or CIDR ranges of the reverse proxies in front of the app,
+   * comma separated (e.g. `10.0.0.0/8,fd00::/8`).
+   *
+   * When set, `X-Forwarded-For` is honoured only on connections that
+   * actually arrive from one of these peers. That is stronger than counting
+   * hops, which silently trusts a spoofed header if the app is ever reached
+   * directly.
+   */
+  TRUSTED_PROXIES: z
+    .string()
+    .default('')
+    .transform((value) =>
+      value
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
+
+  /** Browser origins allowed to call the API with credentials, comma separated. */
+  WEB_ORIGIN: z
+    .string()
+    .default('http://localhost:3000')
+    .transform((value, ctx) => {
+      const origins = value
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+
+      for (const origin of origins) {
+        if (origin === '*') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: '"*" is not allowed: the API sends credentialed CORS responses',
+          });
+          continue;
+        }
+        let parsed: URL;
+        try {
+          parsed = new URL(origin);
+        } catch {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `"${origin}" is not a URL` });
+          continue;
+        }
+        if (parsed.origin !== origin) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `"${origin}" must be a bare origin such as ${parsed.origin}`,
+          });
+        }
+      }
+      return origins;
+    }),
+
+  /**
+   * Return raw error messages in 500 responses. Off unless asked for, so a
+   * staging box that forgot to set NODE_ENV=production does not leak
+   * database errors.
+   */
+  EXPOSE_ERROR_DETAILS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+
   /** Session lifetime in seconds. Default 7 days. */
   SESSION_TTL_SECONDS: z.coerce
     .number()
@@ -77,3 +141,20 @@ if (config.KEY_PEPPER === config.SESSION_SECRET) {
 
 export const isProduction = config.NODE_ENV === 'production';
 export const isTest = config.NODE_ENV === 'test';
+
+if (isProduction) {
+  const insecure = config.WEB_ORIGIN.filter((origin) => !origin.startsWith('https://'));
+  if (insecure.length > 0) {
+    throw new Error(
+      `Invalid environment configuration:\n  - WEB_ORIGIN must use https in production (${insecure.join(', ')})`,
+    );
+  }
+
+  // Counting hops trusts whatever X-Forwarded-For says if the app is ever
+  // reachable directly. In production, name the proxies instead.
+  if (config.TRUST_PROXY_HOPS > 0 && config.TRUSTED_PROXIES.length === 0) {
+    throw new Error(
+      'Invalid environment configuration:\n  - TRUST_PROXY_HOPS > 0 requires TRUSTED_PROXIES in production',
+    );
+  }
+}
