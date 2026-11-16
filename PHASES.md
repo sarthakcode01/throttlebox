@@ -83,13 +83,13 @@ flowchart LR
 
 ### Phase 5 — Analytics & TimescaleDB · Days 21–27 ⭐ ✅
 
-|                   |                                                                                                                                                                                                                                                      |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|                   |                                                                                                                                                                                                                                                                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Deliverables**  | `request_logs` hypertable + indexes, non-blocking batched ingestion buffer (500ms / 100 rows), continuous aggregate `usage_hourly` for latency percentiles and volume, analytics query service (`/api/analytics/*`), interactive React 19 SVG dashboard, signed HMAC-SHA256 quota webhooks (80% and 100% threshold monitoring) |
-| **Deps**          | Phase 4 (needs `rate_limited`, `key_id`, latency data flowing)                                                                                                                                                                                       |
-| **Exit criteria** | Traffic → charts populate from aggregates; webhook fires at 80% & 100%; p95 flat at 1M rows                                                                                                                                                                 |
-| **Risk**          | High — backpressure and insert batching; the de-facto postmortem story                                                                                                                                                                               |
-| **Done**          | 2026-11-02 — 159 server tests passing across 15 test suites; full TimescaleDB continuous aggregate integration, non-blocking Fastify `onResponse` telemetry hook, and responsive dark-theme dashboard at `/dashboard/analytics`.                        |
+| **Deps**          | Phase 4 (needs `rate_limited`, `key_id`, latency data flowing)                                                                                                                                                                                                                                                                 |
+| **Exit criteria** | Traffic → charts populate from aggregates; webhook fires at 80% & 100%; p95 flat at 1M rows                                                                                                                                                                                                                                    |
+| **Risk**          | High — backpressure and insert batching; the de-facto postmortem story                                                                                                                                                                                                                                                         |
+| **Done**          | 2026-11-02 — 159 server tests passing across 15 test suites; full TimescaleDB continuous aggregate integration, non-blocking Fastify `onResponse` telemetry hook, and responsive dark-theme dashboard at `/dashboard/analytics`.                                                                                               |
 
 ### Phase 9 — Deployment · Days 45–48 (pulled forward for MVP)
 
@@ -111,13 +111,13 @@ flowchart LR
 
 ### Phase 6 — Chaos Engineering Controls · Days 28–32 🎯 ✅
 
-|                   |                                                                                                                                                                                                   |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|                   |                                                                                                                                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Deliverables**  | Per-key/org chaos config in Redis, middleware injecting sampled latency / 5xx / 429 / socket drops, dashboard sliders (5s read-through cache), self-demonstrating resilience test page with histogram |
-| **Deps**          | Phase 4 pipeline (inserted before the route handler)                                                                                                                                              |
-| **Exit criteria** | 5% error rate → ~5 failures per 100 requests, correct distribution                                                                                                                                |
-| **Risk**          | Medium — the `weighted_responses` column in Phase 3 exists for this                                                                                                                               |
-| **Done**          | 2026-11-14 — Box-Muller Gaussian latency jitter, true TCP socket termination (`request.raw.destroy()`), Redis pub/sub invalidation, Fastify middleware, and interactive resilience test studio.    |
+| **Deps**          | Phase 4 pipeline (inserted before the route handler)                                                                                                                                                  |
+| **Exit criteria** | 5% error rate → ~5 failures per 100 requests, correct distribution                                                                                                                                    |
+| **Risk**          | Medium — the `weighted_responses` column in Phase 3 exists for this                                                                                                                                   |
+| **Done**          | 2026-11-14 — Box-Muller Gaussian latency jitter, true TCP socket termination (`request.raw.destroy()`), Redis pub/sub invalidation, Fastify middleware, and interactive resilience test studio.       |
 
 ### Phase 7 — Time-Travel Playground · Days 33–39 🎯
 
