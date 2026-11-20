@@ -15,7 +15,15 @@ import {
   uuid,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
-import { HTTP_METHODS, KEY_ENVS, KEY_STATUSES, PLANS, ROLES } from '@throttlebox/shared';
+import {
+  HTTP_METHODS,
+  KEY_ENVS,
+  KEY_STATUSES,
+  PLANS,
+  PLAYGROUND_OUTCOMES,
+  PLAYGROUND_REQUEST_KINDS,
+  ROLES,
+} from '@throttlebox/shared';
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -482,3 +490,87 @@ export type OrgWebhook = typeof orgWebhooks.$inferSelect;
 export type NewOrgWebhook = typeof orgWebhooks.$inferInsert;
 export type ChaosRule = typeof chaosRules.$inferSelect;
 export type NewChaosRule = typeof chaosRules.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// Time-Travel Playground (Phase 7)
+// ---------------------------------------------------------------------------
+
+export const playgroundKindEnum = pgEnum('playground_kind', PLAYGROUND_REQUEST_KINDS);
+export const playgroundOutcomeEnum = pgEnum('playground_outcome', PLAYGROUND_OUTCOMES);
+
+export const playgroundSessions = pgTable(
+  'playground_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    name: text('name').notNull().default('Untitled session'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('playground_sessions_org_idx').on(table.orgId, table.createdAt.desc())],
+);
+
+export const playgroundRequests = pgTable(
+  'playground_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => playgroundSessions.id, { onDelete: 'cascade' }),
+    /** Denormalised so every query can be scoped by tenant without a join. */
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    keyId: uuid('key_id').references(() => apiKeys.id, { onDelete: 'set null' }),
+    parentId: uuid('parent_id').references((): AnyPgColumn => playgroundRequests.id, {
+      onDelete: 'set null',
+    }),
+    kind: playgroundKindEnum('kind').notNull().default('send'),
+
+    method: httpMethodEnum('method').notNull(),
+    serviceSlug: text('service_slug').notNull(),
+    path: text('path').notNull(),
+    query: jsonb('query')
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    headers: jsonb('headers')
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    body: text('body'),
+
+    outcome: playgroundOutcomeEnum('outcome').notNull().default('ok'),
+    responseStatus: integer('response_status'),
+    responseHeaders: jsonb('response_headers')
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    responseBody: text('response_body').notNull().default(''),
+    responseTruncated: boolean('response_truncated').notNull().default(false),
+    durationMs: integer('duration_ms').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('playground_requests_session_idx').on(table.sessionId, table.createdAt.desc()),
+    index('playground_requests_org_idx').on(table.orgId),
+    index('playground_requests_created_idx').on(table.createdAt),
+  ],
+);
+
+export const playgroundSessionsRelations = relations(playgroundSessions, ({ one, many }) => ({
+  org: one(orgs, { fields: [playgroundSessions.orgId], references: [orgs.id] }),
+  requests: many(playgroundRequests),
+}));
+
+export const playgroundRequestsRelations = relations(playgroundRequests, ({ one }) => ({
+  session: one(playgroundSessions, {
+    fields: [playgroundRequests.sessionId],
+    references: [playgroundSessions.id],
+  }),
+  key: one(apiKeys, { fields: [playgroundRequests.keyId], references: [apiKeys.id] }),
+}));
+
+export type PlaygroundSessionRow = typeof playgroundSessions.$inferSelect;
+export type PlaygroundRequestRow = typeof playgroundRequests.$inferSelect;
+export type NewPlaygroundRequestRow = typeof playgroundRequests.$inferInsert;

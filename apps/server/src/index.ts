@@ -23,6 +23,8 @@ import { serviceRoutes } from './routes/services.js';
 import { orgRoutes } from './routes/org.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { chaosRoutes } from './routes/chaos.js';
+import { playgroundRoutes } from './routes/playground.js';
+import { startPlaygroundJanitor, stopPlaygroundJanitor } from './playground/janitor.js';
 import { startIngestFlusher, stopIngestFlusher, setQuotaCheckCallback } from './analytics/ingest.js';
 import { checkOrgQuotas } from './analytics/quotaMonitor.js';
 
@@ -69,6 +71,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await fastify.register(orgRoutes, { prefix: '/api' });
   await fastify.register(analyticsRoutes, { prefix: '/api' });
   await fastify.register(chaosRoutes, { prefix: '/api' });
+  await fastify.register(playgroundRoutes, { prefix: '/api' });
   await fastify.register(mockPreviewRoutes, { prefix: '/api' });
 
   // The public mock API and its OpenAPI document live outside /api — they
@@ -83,6 +86,7 @@ async function main() {
   const fastify = await buildServer();
   startTouchFlusher();
   startSessionJanitor();
+  startPlaygroundJanitor();
   startTierPubSub();
   startRouterPubSub();
   startChaosPubSub();
@@ -96,6 +100,7 @@ async function main() {
     await stopIngestFlusher();
     await stopTouchFlusher();
     await stopSessionJanitor();
+    stopPlaygroundJanitor();
     await stopTierPubSub();
     await stopRouterPubSub();
     await stopChaosPubSub();

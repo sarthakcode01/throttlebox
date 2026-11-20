@@ -1,7 +1,8 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import type { KeyScope } from '@throttlebox/shared';
-import { verifyKey, type AuthKeyContext } from './verify.js';
+import { INTERNAL_AUTH_HEADER, INTERNAL_KEY_ID_HEADER, isInternalToken } from '../playground/internalAuth.js';
+import { loadKeyContextById, verifyKey, type AuthKeyContext } from './verify.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -35,6 +36,21 @@ export const keyAuthPlugin = fp(async (fastify) => {
   fastify.decorateRequest('keyAuth', null);
 
   fastify.decorate('requireKeyAuth', async (request, reply) => {
+    // The playground runner acts as one of the org's keys without holding its
+    // secret. Anything that does not present the per-process token falls
+    // through to the ordinary bearer path, so external callers are unaffected.
+    if (isInternalToken(request.headers[INTERNAL_AUTH_HEADER])) {
+      const keyId = request.headers[INTERNAL_KEY_ID_HEADER];
+      const internal = typeof keyId === 'string' ? await loadKeyContextById(keyId) : null;
+      if (!internal) {
+        return reply
+          .code(401)
+          .send({ error: 'unauthorized', message: 'A valid API key is required' });
+      }
+      request.keyAuth = internal;
+      return undefined;
+    }
+
     const raw = extractBearerKey(request);
 
     if (!raw) {

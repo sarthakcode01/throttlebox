@@ -157,3 +157,49 @@ async function fail(
     metadata: { reason },
   });
 }
+
+/**
+ * Build an auth context for a key identified by id, without its secret.
+ *
+ * Used only by the playground runner, which presents the per-process
+ * internal token instead of the raw key (the raw key is never stored). Every
+ * lifecycle check from `verifyKey` still applies — revoked family, revoked
+ * key, expiry, elapsed grace window — and it reads the database directly
+ * rather than the cache, so a revocation is honoured immediately.
+ */
+export async function loadKeyContextById(keyId: string): Promise<AuthKeyContext | null> {
+  const [row] = await db
+    .select({
+      id: apiKeys.id,
+      orgId: apiKeys.orgId,
+      familyId: apiKeys.familyId,
+      env: apiKeys.env,
+      scopes: apiKeys.scopes,
+      status: apiKeys.status,
+      expiresAt: apiKeys.expiresAt,
+      graceUntil: apiKeys.graceUntil,
+      familyRevokedAt: apiKeyFamilies.revokedAt,
+    })
+    .from(apiKeys)
+    .innerJoin(apiKeyFamilies, eq(apiKeys.familyId, apiKeyFamilies.id))
+    .where(eq(apiKeys.id, keyId))
+    .limit(1);
+
+  if (!row) return null;
+
+  const now = new Date();
+  if (row.familyRevokedAt) return null;
+  if (row.status !== 'active') return null;
+  if (row.expiresAt && row.expiresAt <= now) return null;
+  if (row.graceUntil && row.graceUntil <= now) return null;
+
+  touch(row.id);
+
+  return {
+    keyId: row.id,
+    orgId: row.orgId,
+    familyId: row.familyId,
+    env: row.env,
+    scopes: normalizeScopes(row.scopes),
+  };
+}

@@ -43,3 +43,4 @@ docker/
 # scratch files
 tmp-*.json
 tmp-*.txt
+.tmp-playground-export/

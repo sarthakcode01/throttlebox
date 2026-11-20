@@ -48,6 +48,8 @@ describe('applied database schema', () => {
       'request_logs',
       'org_webhooks',
       'chaos_rules',
+      'playground_sessions',
+      'playground_requests',
     ]) {
       expect(names).toContain(table);
     }
