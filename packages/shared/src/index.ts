@@ -19,9 +19,27 @@ export type Role = (typeof ROLES)[number];
  */
 export const PERMISSIONS: Record<Role, readonly string[]> = {
   owner: ['*'],
-  admin: ['keys:*', 'members:invite', 'plugins:deploy', 'mock:*', 'chaos:*', 'org:*', 'analytics:*'],
-  dev: ['keys:create', 'keys:read', 'keys:rotate', 'keys:revoke', 'mock:*', 'chaos:*', 'analytics:*'],
-  viewer: ['keys:read', 'mock:read', 'analytics:read'],
+  admin: [
+    'keys:*',
+    'members:invite',
+    'plugins:deploy',
+    'mock:*',
+    'chaos:*',
+    'org:*',
+    'analytics:*',
+    'playground:*',
+  ],
+  dev: [
+    'keys:create',
+    'keys:read',
+    'keys:rotate',
+    'keys:revoke',
+    'mock:*',
+    'chaos:*',
+    'analytics:*',
+    'playground:*',
+  ],
+  viewer: ['keys:read', 'mock:read', 'analytics:read', 'playground:read'],
 };
 
 export function roleHasPermission(role: Role, permission: string): boolean {
@@ -411,3 +429,73 @@ export interface ChaosBenchmarkResult {
   }[];
 }
 
+
+// ---------------------------------------------------------------------------
+// Time-Travel Playground (Phase 7)
+// ---------------------------------------------------------------------------
+
+export * from './diff.js';
+
+export const PLAYGROUND_REQUEST_KINDS = ['send', 'replay', 'fork'] as const;
+export type PlaygroundRequestKind = (typeof PLAYGROUND_REQUEST_KINDS)[number];
+
+export const PLAYGROUND_OUTCOMES = ['ok', 'dropped', 'error'] as const;
+export type PlaygroundOutcome = (typeof PLAYGROUND_OUTCOMES)[number];
+
+export const PLAYGROUND_EXPORT_FORMATS = ['vitest', 'postman'] as const;
+export type PlaygroundExportFormat = (typeof PLAYGROUND_EXPORT_FORMATS)[number];
+
+/** Hard limits, shared so the UI can show them. */
+export const PLAYGROUND_LIMITS = {
+  maxRequestsPerSession: 500,
+  maxBodyBytes: 64 * 1024,
+  retentionDays: 30,
+} as const;
+
+export interface PlaygroundSession {
+  id: string;
+  orgId: string;
+  name: string;
+  requestCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlaygroundRequest {
+  id: string;
+  sessionId: string;
+  keyId: string | null;
+  keyDisplay: string | null;
+  parentId: string | null;
+  kind: PlaygroundRequestKind;
+  method: HttpMethod;
+  serviceSlug: string;
+  path: string;
+  query: Record<string, string>;
+  headers: Record<string, string>;
+  body: string | null;
+  outcome: PlaygroundOutcome;
+  responseStatus: number | null;
+  responseHeaders: Record<string, string>;
+  responseBody: string;
+  responseTruncated: boolean;
+  durationMs: number;
+  createdAt: string;
+}
+
+export interface PlaygroundSendRequest {
+  keyId: string;
+  method: HttpMethod;
+  serviceSlug: string;
+  path: string;
+  query?: Record<string, string>;
+  headers?: Record<string, string>;
+  body?: string | null;
+  /** Set when forking from an earlier request. */
+  parentId?: string;
+}
+
+export interface PlaygroundReplayRequest {
+  /** Override the key used for the original request. */
+  keyId?: string;
+}
