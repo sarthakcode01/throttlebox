@@ -126,6 +126,7 @@ flowchart LR
 | **Deliverables**  | `playground_sessions` / `playground_requests` capture, in-app request runner (Monaco) reusing the real pipeline, replay + fork, JSON deep-diff side-by-side, export to Vitest snapshot / OpenAPI / Postman |
 | **Deps**          | Phases 3, 5, 6                                                                                                                                                                                             |
 | **Exit criteria** | Send → toggle chaos → replay → diff → exported test passes locally                                                                                                                                         |
+| **Done**          | 2026-11-20 — in-process runner through the real pipeline (internal per-boot token, no raw keys stored), capture/replay/fork, structural JSON diff, Vitest + Postman export with an end-to-end test that runs the generated file, `/dashboard/playground`. Monaco deferred (plain editor). |
 | **Risk**          | High — the largest surface area; ship 7.1–7.4 first, treat 7.5 as the bonus                                                                                                                                |
 
 ### Phase 8 — Testing & CI Hardening · Days 40–44
@@ -148,7 +149,7 @@ flowchart LR
 - [x] P4 Rate Limiting ⭐
 - [x] P5 Analytics ⭐
 - [x] P6 Chaos 🎯
-- [ ] P7 Time Travel 🎯
+- [x] P7 Time Travel 🎯
 - [ ] P8 Testing & CI
 - [ ] P9 Deployment
 - [ ] P10 Polish
