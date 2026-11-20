@@ -25,6 +25,10 @@ import type {
   UpdateChaosRuleRequest,
   ChaosBenchmarkRequest,
   ChaosBenchmarkResult,
+  PlaygroundExportFormat,
+  PlaygroundRequest,
+  PlaygroundSendRequest,
+  PlaygroundSession,
 } from '@throttlebox/shared';
 
 /**
@@ -262,4 +266,60 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  // Time-Travel Playground (Phase 7)
+  listPlaygroundSessions: () =>
+    request<{ sessions: PlaygroundSession[] }>('/api/playground/sessions'),
+
+  createPlaygroundSession: (name?: string) =>
+    request<{ session: PlaygroundSession }>('/api/playground/sessions', {
+      method: 'POST',
+      body: JSON.stringify(name ? { name } : {}),
+    }),
+
+  renamePlaygroundSession: (id: string, name: string) =>
+    request<{ session: PlaygroundSession }>(`/api/playground/sessions/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+
+  deletePlaygroundSession: (id: string) =>
+    request<{ success: boolean }>(`/api/playground/sessions/${id}`, { method: 'DELETE' }),
+
+  listPlaygroundRequests: (sessionId: string) =>
+    request<{ requests: PlaygroundRequest[] }>(
+      `/api/playground/sessions/${sessionId}/requests?limit=200`,
+    ),
+
+  sendPlaygroundRequest: (sessionId: string, body: PlaygroundSendRequest) =>
+    request<{ request: PlaygroundRequest }>(`/api/playground/sessions/${sessionId}/send`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  replayPlaygroundRequest: (id: string, keyId?: string) =>
+    request<{ request: PlaygroundRequest }>(`/api/playground/requests/${id}/replay`, {
+      method: 'POST',
+      body: JSON.stringify(keyId ? { keyId } : {}),
+    }),
+
+  /** Download an export. Returns the file text and the server-suggested filename. */
+  exportPlaygroundSession: async (
+    sessionId: string,
+    format: PlaygroundExportFormat,
+    ids?: string[],
+  ): Promise<{ filename: string; text: string }> => {
+    const qs = new URLSearchParams({ format });
+    if (ids && ids.length > 0) qs.set('ids', ids.join(','));
+    const response = await fetch(
+      `${API_URL}/api/playground/sessions/${sessionId}/export?${qs.toString()}`,
+      { credentials: 'include' },
+    );
+    if (!response.ok) {
+      throw new ApiError(response.status, 'export_failed', 'Could not export this session');
+    }
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `playground.${format}`;
+    return { filename, text: await response.text() };
+  },
 };
