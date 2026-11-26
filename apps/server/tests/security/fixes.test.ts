@@ -46,7 +46,14 @@ describe('webhook egress guard — address classification', () => {
   });
 
   it('allows public IPv4 addresses, including ones adjacent to blocked ranges', () => {
-    const allowed = ['8.8.8.8', '1.1.1.1', '93.184.216.34', '11.0.0.1', '172.32.0.1', '100.128.0.1'];
+    const allowed = [
+      '8.8.8.8',
+      '1.1.1.1',
+      '93.184.216.34',
+      '11.0.0.1',
+      '172.32.0.1',
+      '100.128.0.1',
+    ];
     for (const address of allowed) {
       expect(blockedIpv4Reason(address), address).toBeNull();
     }
@@ -275,7 +282,7 @@ describe('response templates cannot read credentials', () => {
       'x-api-key': 'sk_live_abcdef',
       'x-throttlebox-internal': 'f'.repeat(64),
       'set-cookie': 'leak=1',
-      'accept': 'application/json',
+      accept: 'application/json',
       'user-agent': 'curl/8',
     });
 
