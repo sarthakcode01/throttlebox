@@ -21,6 +21,7 @@ import type {
   RequestLogSummary,
   WebhookConfig,
   CreateWebhookRequest,
+  CreateWebhookResponse,
   ChaosRuleConfig,
   UpdateChaosRuleRequest,
   ChaosBenchmarkRequest,
@@ -69,7 +70,9 @@ async function request<T>(
     headers.set('Content-Type', 'application/json');
   }
   if (isMutation) {
-    const csrf = readCookie('throttlebox_csrf');
+    // Production sets the `__Host-` prefix; development does not. Read both so
+    // the same client works in either environment.
+    const csrf = readCookie('__Host-throttlebox_csrf') ?? readCookie('throttlebox_csrf');
     if (csrf) headers.set('X-CSRF-Token', csrf);
   }
 
@@ -211,19 +214,22 @@ export const api = {
   },
 
   getAnalyticsLatency: (range = '24h') =>
-    request<{ series: AnalyticsLatencyBucket[] }>(`/api/analytics/latency?range=${encodeURIComponent(range)}`),
+    request<{ series: AnalyticsLatencyBucket[] }>(
+      `/api/analytics/latency?range=${encodeURIComponent(range)}`,
+    ),
 
   getAnalyticsErrors: (range = '24h') =>
     request<AnalyticsErrorsBreakdown>(`/api/analytics/errors?range=${encodeURIComponent(range)}`),
 
   getAnalyticsLogs: (limit = 50, offset = 0) =>
-    request<{ logs: RequestLogSummary[]; total: number }>(`/api/analytics/logs?limit=${limit}&offset=${offset}`),
+    request<{ logs: RequestLogSummary[]; total: number }>(
+      `/api/analytics/logs?limit=${limit}&offset=${offset}`,
+    ),
 
-  getWebhooks: () =>
-    request<{ webhooks: WebhookConfig[] }>('/api/analytics/webhooks'),
+  getWebhooks: () => request<{ webhooks: WebhookConfig[] }>('/api/analytics/webhooks'),
 
   createWebhook: (body: CreateWebhookRequest) =>
-    request<WebhookConfig>('/api/analytics/webhooks', {
+    request<CreateWebhookResponse>('/api/analytics/webhooks', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
@@ -232,9 +238,12 @@ export const api = {
     request<{ success: boolean }>(`/api/analytics/webhooks/${id}`, { method: 'DELETE' }),
 
   testWebhook: (id: string) =>
-    request<{ success: boolean; statusCode?: number; error?: string }>(`/api/analytics/webhooks/${id}/test`, {
-      method: 'POST',
-    }),
+    request<{ success: boolean; statusCode?: number; error?: string }>(
+      `/api/analytics/webhooks/${id}/test`,
+      {
+        method: 'POST',
+      },
+    ),
 
   // Chaos Engineering (Phase 6)
   getChaosRules: () =>

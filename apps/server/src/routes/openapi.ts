@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { getServiceBySlug, listRoutes } from '../mock/services.js';
 import { buildOpenApiDocument } from '../mock/openapi.js';
+import { roleHasPermission } from '@throttlebox/shared';
 import { extractBearerKey } from '../keys/middleware.js';
 import { verifyKey } from '../keys/verify.js';
 
@@ -23,6 +24,29 @@ async function resolveOrgId(request: FastifyRequest): Promise<string | null> {
 }
 
 /**
+ * Whether the caller may read this service's document.
+ *
+ * Knowing the org id is not enough. An API key can be minted with a narrow
+ * scope — `keys:read`, say — and a scope check that never runs turns every key
+ * into a full read credential for the mock surface. A dashboard session is
+ * authorised through the normal permission check in the route.
+ */
+async function canReadMockDocument(request: FastifyRequest): Promise<boolean> {
+  if (request.auth) {
+    const role = request.auth.role;
+    return role !== null && roleHasPermission(role, 'mock:read');
+  }
+
+  const raw = extractBearerKey(request);
+  if (!raw) return false;
+
+  const context = await verifyKey(raw);
+  // Mirrors `requireScope`: scope membership, and an empty list is `mock:read`
+  // only (see `keys/store.ts`) — which the stored row already reflects.
+  return context !== null && context.scopes.includes('mock:read');
+}
+
+/**
  * The OpenAPI document for a mock service.
  *
  * It describes the shape of the API, not anybody's data.
@@ -39,6 +63,14 @@ export const openApiRoutes: FastifyPluginAsync = async (fastify) => {
       return reply
         .code(403)
         .send({ error: 'forbidden', message: 'Sign in or use an API key to read the document' });
+    }
+
+    if (!(await canReadMockDocument(request))) {
+      // Same shape as any other missing permission: a key that cannot call the
+      // mocks has no business enumerating their shape.
+      return reply
+        .code(403)
+        .send({ error: 'forbidden', message: 'This credential cannot read mock definitions' });
     }
 
     const service = await getServiceBySlug(orgId, params.data.serviceSlug);

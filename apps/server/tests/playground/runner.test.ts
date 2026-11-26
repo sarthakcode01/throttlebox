@@ -11,9 +11,9 @@ import {
   truncateToBytes,
 } from '../../src/playground/runner.js';
 import {
-  getInternalToken,
   INTERNAL_AUTH_HEADER,
   INTERNAL_KEY_ID_HEADER,
+  internalAuthHeaders,
   isInternalToken,
 } from '../../src/playground/internalAuth.js';
 import { createApiKey, signUp, startApp, type Client, type TestApp } from '../helpers/app.js';
@@ -76,11 +76,13 @@ describe('pure helpers', () => {
 });
 
 describe('internal authentication', () => {
-  it('the token is long, stable within a process, and verified in constant time', () => {
-    expect(getInternalToken()).toMatch(/^[0-9a-f]{64}$/);
-    expect(getInternalToken()).toBe(getInternalToken());
-    expect(isInternalToken(getInternalToken())).toBe(true);
+  it('issues a long, stable token and verifies it in constant time', () => {
+    const token = internalAuthHeaders('any-key-id')[INTERNAL_AUTH_HEADER];
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(internalAuthHeaders('any-key-id')[INTERNAL_AUTH_HEADER]).toBe(token);
+    expect(isInternalToken(token)).toBe(true);
     expect(isInternalToken('nope')).toBe(false);
+    expect(isInternalToken('')).toBe(false);
     expect(isInternalToken(undefined)).toBe(false);
     expect(isInternalToken(['x'])).toBe(false);
   });
@@ -104,7 +106,7 @@ describe('internal authentication', () => {
   it('the right token with an unknown key id is still 401, not a bypass', async () => {
     const res = await request(t.server)
       .get('/mock/ecommerce/products/1')
-      .set(INTERNAL_AUTH_HEADER, getInternalToken())
+      .set(INTERNAL_AUTH_HEADER, internalAuthHeaders('x')[INTERNAL_AUTH_HEADER] as string)
       .set(INTERNAL_KEY_ID_HEADER, '00000000-0000-4000-8000-000000000000');
     expect(res.status).toBe(401);
   });
@@ -112,7 +114,7 @@ describe('internal authentication', () => {
   it('the right token without a key id is 401', async () => {
     const res = await request(t.server)
       .get('/mock/ecommerce/products/1')
-      .set(INTERNAL_AUTH_HEADER, getInternalToken());
+      .set(INTERNAL_AUTH_HEADER, internalAuthHeaders('x')[INTERNAL_AUTH_HEADER] as string);
     expect(res.status).toBe(401);
   });
 });
@@ -185,7 +187,9 @@ describe('runPlaygroundRequest through the real pipeline', () => {
   it('is subject to chaos: an injected 503 is captured with its marker header', async () => {
     const owner = await signUp(t, 'pg-chaos');
     const key = await createApiKey(owner);
-    await setChaos(owner, { errors: { enabled: true, rate5xx: 1, rate429: 0, statusCodes: [503] } });
+    await setChaos(owner, {
+      errors: { enabled: true, rate5xx: 1, rate429: 0, statusCodes: [503] },
+    });
     const run = await runPlaygroundRequest(t.app, {
       orgId: owner.orgId,
       keyId: key.id,
@@ -238,7 +242,13 @@ describe('runPlaygroundRequest through the real pipeline', () => {
     });
     const run = await runPlaygroundRequest(
       t.app,
-      { orgId: owner.orgId, keyId: key.id, method: 'GET', serviceSlug: 'ecommerce', path: '/products/1' },
+      {
+        orgId: owner.orgId,
+        keyId: key.id,
+        method: 'GET',
+        serviceSlug: 'ecommerce',
+        path: '/products/1',
+      },
       { timeoutMs: 300 },
     );
     expect(run.outcome).toBe('error');

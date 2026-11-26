@@ -325,7 +325,6 @@ export const mockRoutes = pgTable(
 // Relations
 // ---------------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------------
 // Telemetry & Logging (Phase 5)
 // ---------------------------------------------------------------------------
@@ -371,6 +370,43 @@ export const orgWebhooks = pgTable(
   (table) => [index('org_webhooks_org_idx').on(table.orgId)],
 );
 
+/**
+ * Durable outbox for quota webhook deliveries.
+ *
+ * Delivery used to happen inline inside the telemetry flush: `await
+ * dispatchWebhook(...)` with a 5s timeout, per webhook, per touched org. One
+ * endpoint that accepted the connection and never answered therefore stalled
+ * the single-flighted ingest loop for everyone, and a failure was lost with no
+ * record. Rows here are written cheaply and drained by a background worker with
+ * backoff, so the request path never waits on a third party and a failed alert
+ * is still visible.
+ */
+export const webhookDeliveries = pgTable(
+  'webhook_deliveries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    webhookId: uuid('webhook_id')
+      .notNull()
+      .references(() => orgWebhooks.id, { onDelete: 'cascade' }),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    event: text('event').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+    status: text('status').notNull().default('pending'), // pending | delivered | failed
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  },
+  (table) => [
+    index('webhook_deliveries_pending_idx').on(table.status, table.nextAttemptAt),
+    index('webhook_deliveries_webhook_idx').on(table.webhookId, table.createdAt),
+    index('webhook_deliveries_org_idx').on(table.orgId, table.createdAt),
+  ],
+);
+
 export const chaosRules = pgTable(
   'chaos_rules',
   {
@@ -389,12 +425,14 @@ export const chaosRules = pgTable(
       minMs: 0,
       maxMs: 30000,
     }),
-    errors: jsonb('errors').notNull().default({
-      enabled: false,
-      rate5xx: 0.0,
-      rate429: 0.0,
-      statusCodes: [500, 502, 503, 504],
-    }),
+    errors: jsonb('errors')
+      .notNull()
+      .default({
+        enabled: false,
+        rate5xx: 0.0,
+        rate429: 0.0,
+        statusCodes: [500, 502, 503, 504],
+      }),
     partition: jsonb('partition').notNull().default({
       enabled: false,
       dropRate: 0.0,
@@ -451,7 +489,6 @@ export const mockServicesRelations = relations(mockServices, ({ one, many }) => 
 export const mockRoutesRelations = relations(mockRoutes, ({ one }) => ({
   service: one(mockServices, { fields: [mockRoutes.serviceId], references: [mockServices.id] }),
 }));
-
 
 export const requestLogsRelations = relations(requestLogs, ({ one }) => ({
   org: one(orgs, { fields: [requestLogs.orgId], references: [orgs.id] }),

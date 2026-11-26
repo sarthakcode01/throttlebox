@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import Fastify from 'fastify';
 import { safeEqualHex, safeEqualString } from '../../src/util/crypto.js';
 import { redact } from '../../src/keys/redact.js';
-import { registerErrorHandler } from '../../src/http/errorHandler.js';
+import { registerErrorHandler, safeError } from '../../src/http/errorHandler.js';
 import { registerSecurityHeaders } from '../../src/http/securityHeaders.js';
 import { registerLenientContentType } from '../../src/http/contentType.js';
 import { createRateLimit } from '../../src/http/rateLimit.js';
@@ -32,6 +32,12 @@ describe('redact', () => {
     expect(redact(text)).toBe('a sk_*** b sk_***');
   });
 
+  it('scrubs webhook signing secrets as well as API keys', () => {
+    expect(redact('secret whsec_0123456789abcdef0123 in a body')).toBe(
+      'secret whsec_*** in a body',
+    );
+  });
+
   it('leaves text without keys alone and tolerates empty input', () => {
     expect(redact('nothing to see')).toBe('nothing to see');
     expect(redact('')).toBe('');
@@ -46,9 +52,14 @@ describe('error handler', () => {
       throw new Error('relation "secret_table" does not exist');
     });
     f.get('/teapot', async () => {
-      const e = new Error('short and stout') as Error & { statusCode: number; code: string };
-      e.statusCode = 418;
-      e.code = 'teapot';
+      throw safeError(418, 'short and stout', 'teapot');
+    });
+    f.get('/leaky', async () => {
+      // A 4xx that did NOT opt in: its message must not reach the client.
+      const e = new Error('relation "secret_table" does not exist') as Error & {
+        statusCode: number;
+      };
+      e.statusCode = 400;
       throw e;
     });
     await f.ready();
@@ -60,6 +71,15 @@ describe('error handler', () => {
     const res = await f.inject('/teapot');
     expect(res.statusCode).toBe(418);
     expect(res.json()).toEqual({ error: 'teapot', message: 'short and stout' });
+    await f.close();
+  });
+
+  it('withholds the message of a 4xx that did not opt in', async () => {
+    const f = await app();
+    const res = await f.inject('/leaky');
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toBe('The request could not be processed');
+    expect(JSON.stringify(res.json())).not.toContain('secret_table');
     await f.close();
   });
 

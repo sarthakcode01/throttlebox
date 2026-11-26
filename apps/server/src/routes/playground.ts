@@ -42,11 +42,16 @@ const pathSchema = z
     (p) => !/[?#\\]/.test(p) && ![...p].some((c) => c.charCodeAt(0) < 0x20),
     'Path may not contain ?, #, backslashes or control characters',
   )
-  .refine((p) => !p.split('/').some((seg) => seg === '..' || seg === '.'), 'Path may not contain dot segments');
+  .refine(
+    (p) => !p.split('/').some((seg) => seg === '..' || seg === '.'),
+    'Path may not contain dot segments',
+  );
 
+// zod 4 requires both the key and value schema. With one argument the value
+// type becomes `unknown`, which silently widens every downstream type.
 const stringRecord = (max: number) =>
   z
-    .record(z.string().max(2000))
+    .record(z.string(), z.string().max(2000))
     .refine((r) => Object.keys(r).length <= max, `At most ${max} entries`);
 
 const sendSchema = z.object({
@@ -60,7 +65,11 @@ const sendSchema = z.object({
   path: pathSchema,
   query: stringRecord(50).optional(),
   headers: stringRecord(50).optional(),
-  body: z.string().max(256 * 1024).nullable().optional(),
+  body: z
+    .string()
+    .max(256 * 1024)
+    .nullable()
+    .optional(),
   parentId: z.string().uuid().optional(),
 });
 
@@ -84,7 +93,12 @@ function signature(r: PlaygroundRequest): string {
 }
 
 function fileSlug(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'playground';
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'playground'
+  );
 }
 
 export const playgroundRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
@@ -102,7 +116,9 @@ export const playgroundRoutes: FastifyPluginAsync = async (fastify: FastifyInsta
   /** Convert a store error into an HTTP response; rethrow anything unexpected. */
   function handle(err: unknown, reply: FastifyReply) {
     if (err instanceof PlaygroundError) {
-      return reply.code(playgroundErrorStatus(err.code)).send({ error: err.code, message: err.message });
+      return reply
+        .code(playgroundErrorStatus(err.code))
+        .send({ error: err.code, message: err.message });
     }
     throw err;
   }
@@ -118,7 +134,11 @@ export const playgroundRoutes: FastifyPluginAsync = async (fastify: FastifyInsta
     if (!parsed.success) {
       return reply.code(400).send({ error: 'validation_error', message: 'Invalid session name' });
     }
-    const session = await createSession(request.auth!.orgId!, request.auth!.userId, parsed.data.name);
+    const session = await createSession(
+      request.auth!.orgId!,
+      request.auth!.userId,
+      parsed.data.name,
+    );
     return reply.code(201).send({ session });
   });
 
@@ -316,7 +336,10 @@ export const playgroundRoutes: FastifyPluginAsync = async (fastify: FastifyInsta
     try {
       const session = await getSession(orgId, params.data.id);
       const ids = query.data.ids
-        ? query.data.ids.split(',').map((s) => s.trim()).filter(Boolean)
+        ? query.data.ids
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
         : undefined;
       if (ids && !ids.every((i) => z.string().uuid().safeParse(i).success)) {
         return reply.code(400).send({ error: 'validation_error', message: 'ids must be UUIDs' });
@@ -333,11 +356,19 @@ export const playgroundRoutes: FastifyPluginAsync = async (fastify: FastifyInsta
         requests = [...latest.values()];
       }
 
-      const baseUrl = `${request.protocol}://${request.host}`;
+      // Prefer the configured public URL over the request's `Host` header.
+      //
+      // The header is attacker-influenced, and this value is written into a
+      // generated test file that a developer then runs. Deriving it from the
+      // request would let a spoofed `Host` point their test at someone else.
+      const baseUrl = process.env.PUBLIC_API_URL ?? `${request.protocol}://${request.host}`;
       const slug = fileSlug(session.name);
 
       if (query.data.format === 'postman') {
-        reply.header('Content-Disposition', `attachment; filename="${slug}.postman_collection.json"`);
+        reply.header(
+          'Content-Disposition',
+          `attachment; filename="${slug}.postman_collection.json"`,
+        );
         return reply
           .type('application/json')
           .send(toPostman(requests, { sessionName: session.name, baseUrl }));

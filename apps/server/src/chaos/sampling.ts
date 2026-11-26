@@ -61,9 +61,10 @@ export function sampleLatency(config?: ChaosLatencyConfig | null): number {
         uMin = minFloor;
         uMax = config.maxMs;
       } else {
-        const halfWidth = config.stddevMs > 0
-          ? Math.round(Math.sqrt(3) * config.stddevMs)
-          : Math.round(config.meanMs);
+        const halfWidth =
+          config.stddevMs > 0
+            ? Math.round(Math.sqrt(3) * config.stddevMs)
+            : Math.round(config.meanMs);
         uMin = Math.max(minFloor, config.meanMs - halfWidth);
         uMax = Math.min(maxCeiling, config.meanMs + halfWidth);
       }
@@ -106,10 +107,13 @@ export function shouldInjectError(config?: ChaosErrorConfig | null): ErrorInject
 
   // 2. Check 5xx server error simulation
   if (config.rate5xx > 0 && Math.random() < Math.min(1.0, config.rate5xx)) {
-    const codes = config.statusCodes && config.statusCodes.length > 0
-      ? config.statusCodes
-      : [500, 502, 503, 504];
-    const picked = codes[Math.floor(Math.random() * codes.length)] ?? 500;
+    // Filter before choosing: rows written before the schema bounded this field
+    // can still hold an out-of-range code, and `reply.code(0)` throws.
+    const codes = (config.statusCodes ?? []).filter(
+      (code) => Number.isInteger(code) && code >= 400 && code <= 599,
+    );
+    const pool = codes.length > 0 ? codes : [500, 502, 503, 504];
+    const picked = pool[Math.floor(Math.random() * pool.length)] ?? 500;
     return { inject: true, statusCode: picked, is429: false };
   }
 

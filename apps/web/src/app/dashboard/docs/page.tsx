@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { STOPLIGHT_SCRIPT, STOPLIGHT_STYLES } from '@/lib/stoplightAssets';
 
 type DocsViewMode = 'stoplight' | 'explorer' | 'raw';
 
@@ -14,6 +15,7 @@ export default function DashboardDocsPage() {
   const [specLoading, setSpecLoading] = useState(false);
   const [specError, setSpecError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [elementsReady, setElementsReady] = useState(false);
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -73,27 +75,51 @@ export default function DashboardDocsPage() {
     return () => controller.abort();
   }, [selectedSlug, apiUrl]);
 
-  // 3. Inject Stoplight Elements stylesheet and script safely
+  // 3. Load Stoplight Elements, pinned to an exact version and checked against
+  //    an SRI hash. See `lib/stoplightAssets.ts` for why this is not a bare
+  //    `https://unpkg.com/.../latest` tag.
+  //
+  //    If the script cannot load — offline, blocked by CSP, or refused by an
+  //    integrity mismatch — the custom element never registers. `elementsReady`
+  //    drives a visible fallback so the view degrades to a message instead of an
+  //    empty box. An SRI failure must never look like "the docs are broken".
   useEffect(() => {
-    // Inject Stylesheet
-    const cssId = 'stoplight-elements-css';
-    if (!document.getElementById(cssId)) {
+    if (!document.getElementById(STOPLIGHT_STYLES.id)) {
       const link = document.createElement('link');
-      link.id = cssId;
+      link.id = STOPLIGHT_STYLES.id;
       link.rel = 'stylesheet';
-      link.href = 'https://unpkg.com/@stoplight/elements/styles.min.css';
+      link.href = STOPLIGHT_STYLES.href;
+      link.integrity = STOPLIGHT_STYLES.integrity;
+      link.crossOrigin = 'anonymous';
       document.head.appendChild(link);
     }
 
-    // Inject Web Component JS
-    const scriptId = 'stoplight-elements-js';
-    if (!document.getElementById(scriptId)) {
+    if (!document.getElementById(STOPLIGHT_SCRIPT.id)) {
       const script = document.createElement('script');
-      script.id = scriptId;
-      script.src = 'https://unpkg.com/@stoplight/elements/web-components.min.js';
+      script.id = STOPLIGHT_SCRIPT.id;
+      script.src = STOPLIGHT_SCRIPT.src;
+      script.integrity = STOPLIGHT_SCRIPT.integrity;
+      script.crossOrigin = 'anonymous';
       script.async = true;
       document.body.appendChild(script);
     }
+
+    let cancelled = false;
+    const started = Date.now();
+    const poll = window.setInterval(() => {
+      if (cancelled) return;
+      if (customElements.get('elements-api')) {
+        setElementsReady(true);
+        window.clearInterval(poll);
+      } else if (Date.now() - started > 5000) {
+        window.clearInterval(poll);
+      }
+    }, 200);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(poll);
+    };
   }, []);
 
   const handleCopy = (text: string, id: string) => {
@@ -355,7 +381,18 @@ export default function DashboardDocsPage() {
       {/* ====================================================================
           View Mode 2: Stoplight Elements Console
           ==================================================================== */}
-      {spec && viewMode === 'stoplight' && (
+      {spec && viewMode === 'stoplight' && !elementsReady && (
+        <div
+          className="card"
+          style={{ padding: '20px', fontSize: '0.8125rem', color: 'var(--muted)' }}
+        >
+          Could not load the Stoplight Elements bundle (it is version-pinned and integrity-checked,
+          so a blocked or altered download is refused rather than executed). The interactive
+          explorer and the raw OpenAPI document on the other tabs contain the same specification.
+        </div>
+      )}
+
+      {spec && viewMode === 'stoplight' && elementsReady && (
         <div className="stoplight-embed-wrap">
           <elements-api
             apiDescription={spec}

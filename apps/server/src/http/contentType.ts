@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { safeError } from './errorHandler.js';
 
 /**
  * Register a catch-all content type parser.
@@ -25,9 +26,8 @@ export function registerLenientContentType(fastify: FastifyInstance): void {
         return;
       }
 
-      const error = new Error('Unsupported Media Type') as Error & { statusCode: number };
-      error.statusCode = 415;
-      done(error, undefined);
+      // Marked safe: the message describes the caller's own request.
+      done(safeError(415, 'Unsupported Media Type', 'unsupported_media_type'), undefined);
     },
   );
 }

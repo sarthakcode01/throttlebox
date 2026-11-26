@@ -14,7 +14,7 @@ describe('environment validation', () => {
   it('loads with the current (valid) environment', async () => {
     const { config } = await loadConfig();
     expect(config.PORT).toBeGreaterThan(0);
-    expect(config.TRUST_PROXY_HOPS).toBeGreaterThanOrEqual(0);
+    expect(config.TRUST_PROXY_CIDRS).toBeTypeOf('string');
     expect(config.SESSION_TTL_SECONDS).toBeGreaterThan(0);
   });
 
@@ -34,8 +34,13 @@ describe('environment validation', () => {
     await expect(loadConfig()).rejects.toThrow(/DATABASE_URL/);
   });
 
-  it('refuses an out-of-range TRUST_PROXY_HOPS', async () => {
-    vi.stubEnv('TRUST_PROXY_HOPS', '99');
-    await expect(loadConfig()).rejects.toThrow(/TRUST_PROXY_HOPS/);
+  it('refuses a trusted-proxy entry that is not an IP or CIDR range', async () => {
+    vi.stubEnv('TRUST_PROXY_CIDRS', 'not-an-address');
+    await expect(loadConfig()).rejects.toThrow(/TRUST_PROXY_CIDRS/);
+  });
+
+  it('refuses a trusted-proxy range with an out-of-bounds prefix length', async () => {
+    vi.stubEnv('TRUST_PROXY_CIDRS', '10.0.0.0/99');
+    await expect(loadConfig()).rejects.toThrow(/TRUST_PROXY_CIDRS/);
   });
 });

@@ -1,6 +1,8 @@
 # Roadmap & Status
 
-Source of truth: `PHASES.md` plus git history (latest commit `0b564ea` — Phase 6).
+Source of truth: `PHASES.md` plus the code itself. Status is stated as verified
+against the working tree, not against commit hashes: this repository's history
+was squashed, so older hashes no longer resolve.
 
 | Phase | Name                                                                            | Status          |
 | ----- | ------------------------------------------------------------------------------- | --------------- |
@@ -18,9 +20,31 @@ Source of truth: `PHASES.md` plus git history (latest commit `0b564ea` — Phase
 
 ## Suggested next work
 
-1. **Fix stale docs** — root `README.md` says Phases 0–3 only; update status and feature lists.
-2. **Close critical security items** from `SECURITY_AUDIT_2026_11_16.md`: SSRF-proof webhook egress (resolve + pin IP, no redirects), stop returning webhook secrets after creation.
-3. **High-value hardening**: shared (Redis-backed) auth limiter, a limiter on the dashboard `/api/*` incl. chaos benchmark, key-cache pub/sub invalidation, durable webhook delivery, move latency/error/overview queries onto the continuous aggregate.
-4. **Phase 8** (Playwright E2E for the dashboard including the playground; the web app only has unit tests for pure helpers) and **Phase 9** Dockerfile/deploy (no Dockerfile exists yet).
-5. Migration housekeeping: add a drizzle snapshot for 0006 (generate currently re-emits chaos_rules).
-6. Playground follow-ups: Monaco editor, OpenAPI export from captured traffic, pagination beyond 200 requests in the UI.
+The security items here have been **fixed** — see `SECURITY_AUDIT_2026_11_26.md`
+§10 for each finding and its evidence. What remains:
+
+1. **Phase 8 — testing & CI hardening.** CI already runs real Postgres and Redis
+   service containers and `pnpm test` covers 33 suites, so this is narrower than
+   the phase table implies. Still missing, verified by inspection: Playwright E2E
+   (the dashboard and playground have no browser coverage), testcontainers (CI
+   uses service containers instead), a coverage threshold (there is none), and a
+   nightly k6 smoke test.
+
+   **CI is currently red on the base commit**: `pnpm format:check` is repo-wide
+   and 28 committed files are unformatted, so the job fails before typecheck,
+   lint, build and test ever run. That is a formatting debt, not a code failure,
+   and it hides every other result.
+
+2. **Phase 9 — deployment.** No `Dockerfile` exists anywhere in the repo, and no
+   hosting configuration. Everything above is local-only today.
+
+3. **Phase 10 — portfolio polish.** Docs exist and are reasonably complete, but
+   there are no ADRs, no postmortem, and no demo video.
+
+4. **Stale docs.** `README.md` had claimed Phases 0–3 while this file claimed
+   0–7, and `PHASES.md` marked Phase 7 as incomplete while marking Phases 2–6
+   complete. Those are now reconciled; keep them in step as phases land.
+
+5. Playground follow-ups: Monaco editor (currently a plain textarea), OpenAPI
+   export from captured traffic (only Vitest and Postman ship today), and
+   pagination beyond 200 requests in the UI.

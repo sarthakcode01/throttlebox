@@ -14,5 +14,11 @@ import { RAW_KEY_PATTERN } from './format.js';
  */
 export function redact(text: string): string {
   if (!text) return text;
-  return text.replace(new RegExp(RAW_KEY_PATTERN.source, 'g'), 'sk_***');
+  return (
+    text
+      .replace(new RegExp(RAW_KEY_PATTERN.source, 'g'), 'sk_***')
+      // Webhook signing secrets are credentials too, and they can appear in a
+      // stored playground body or an error message the same way a key can.
+      .replace(/whsec_[0-9a-fA-F]{8,}/g, 'whsec_***')
+  );
 }

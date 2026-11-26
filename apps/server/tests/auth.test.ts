@@ -37,9 +37,17 @@ describe('session tokens', () => {
     expect(tokens.size).toBe(100);
   });
 
-  it('hashes deterministically', () => {
+  it('hashes deterministically under the same key', () => {
     const token = generateSessionToken();
-    expect(hashSessionToken(token)).toBe(hashSessionToken(token));
-    expect(hashSessionToken(token)).not.toBe(token);
+    const key = 'test-session-secret-key';
+    expect(hashSessionToken(token, key)).toBe(hashSessionToken(token, key));
+    expect(hashSessionToken(token, key)).not.toBe(token);
+  });
+
+  it('produces a different digest under a different key', () => {
+    const token = generateSessionToken();
+    // The digest is keyed, so a database dump alone cannot be replayed: an
+    // attacker also needs SESSION_SECRET.
+    expect(hashSessionToken(token, 'key-one')).not.toBe(hashSessionToken(token, 'key-two'));
   });
 });

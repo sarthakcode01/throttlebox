@@ -2,8 +2,8 @@ import { eq } from 'drizzle-orm';
 import type { KeyEnv, KeyScope } from '@throttlebox/shared';
 import { db } from '../db/client.js';
 import { apiKeyFamilies, apiKeys } from '../db/schema.js';
-import { recordEventSafe } from './audit.js';
-import { getCachedKey, setCachedKey } from './cache.js';
+import { recordFailureThrottled } from './audit.js';
+import { getCachedKey, invalidateCachedKey, setCachedKey, type CachedKeyRow } from './cache.js';
 import { DUMMY_SECRET_HASH, hashSecret, safeEqualHex } from './generate.js';
 import { parseKey, SECRET_LENGTH } from './format.js';
 import { normalizeScopes } from './store.js';
@@ -40,9 +40,13 @@ export async function verifyKey(raw: string): Promise<AuthKeyContext | null> {
   if (!parsed) return null;
 
   // 2. Redis-cached lookup before hitting Postgres.
-  let row = await getCachedKey(parsed.publicId);
+  //
+  // The cache holds lifecycle state only — never the secret hash. That keeps a
+  // Redis compromise from yielding verifiable credential digests, and it means
+  // the secret is always checked against the row read from the database.
+  const cached = await getCachedKey(parsed.publicId);
 
-  if (!row) {
+  if (!cached) {
     const [dbRow] = await db
       .select({
         id: apiKeys.id,
@@ -69,22 +73,52 @@ export async function verifyKey(raw: string): Promise<AuthKeyContext | null> {
       return null;
     }
 
-    row = {
+    const row: CachedKeyRow = {
       id: dbRow.id,
       orgId: dbRow.orgId,
       familyId: dbRow.familyId,
       env: dbRow.env,
       scopes: dbRow.scopes,
       status: dbRow.status,
-      secretHash: dbRow.secretHash,
       expiresAt: dbRow.expiresAt ? dbRow.expiresAt.toISOString() : null,
       graceUntil: dbRow.graceUntil ? dbRow.graceUntil.toISOString() : null,
       familyRevokedAt: dbRow.familyRevokedAt ? dbRow.familyRevokedAt.toISOString() : null,
     };
 
     await setCachedKey(parsed.publicId, row);
+
+    return finishVerification(row, dbRow.secretHash, parsed);
   }
 
+  // A cache hit still needs the digest to compare the secret against. Read it
+  // from the database — an indexed lookup on `public_id`, which is what the
+  // cache was saving; the lifecycle work below is unchanged.
+  const [secretRow] = await db
+    .select({ secretHash: apiKeys.secretHash })
+    .from(apiKeys)
+    .where(eq(apiKeys.publicId, parsed.publicId))
+    .limit(1);
+
+  if (!secretRow) {
+    // Revoked and purged between the cache read and now.
+    await invalidateCachedKey(parsed.publicId, false);
+    return null;
+  }
+
+  return finishVerification(cached, secretRow.secretHash, parsed);
+}
+
+/**
+ * Apply the lifecycle checks and compare the secret.
+ *
+ * Split out so the cache-hit and cache-miss paths share one implementation:
+ * two copies of these rules is how one of them eventually drifts.
+ */
+async function finishVerification(
+  row: CachedKeyRow,
+  secretHash: string,
+  parsed: { publicId: string; secret: string },
+): Promise<AuthKeyContext | null> {
   const now = new Date();
   const expiresAt = row.expiresAt ? new Date(row.expiresAt) : null;
   const graceUntil = row.graceUntil ? new Date(row.graceUntil) : null;
@@ -117,7 +151,7 @@ export async function verifyKey(raw: string): Promise<AuthKeyContext | null> {
 
   // 7. The secret itself.
   const computed = hashSecret(parsed.publicId, parsed.secret);
-  if (!safeEqualHex(computed, row.secretHash)) {
+  if (!safeEqualHex(computed, secretHash)) {
     await fail(row, 'auth_failed', 'bad_secret');
     return null;
   }
@@ -149,7 +183,7 @@ async function fail(
   event: 'auth_failed' | 'expired',
   reason: string,
 ): Promise<void> {
-  await recordEventSafe({
+  await recordFailureThrottled({
     keyId: row.id,
     familyId: row.familyId,
     orgId: row.orgId,

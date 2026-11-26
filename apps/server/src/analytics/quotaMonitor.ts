@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { db, sql } from '../db/client.js';
 import { orgWebhooks } from '../db/schema.js';
 import { getOrgPlan } from '../ratelimit/tier.js';
-import { dispatchWebhook } from './webhooks.js';
+import { enqueueWebhookEvent } from './webhookOutbox.js';
 
 /**
  * Check quota consumption for an array of org IDs and notify via webhook
@@ -48,19 +48,29 @@ export async function checkSingleOrgQuota(orgId: string): Promise<void> {
     return;
   }
 
-  // Dispatch webhooks in parallel so a slow or hanging destination endpoint does not block others
+  // Queue rather than deliver.
+  //
+  // This used to `await dispatchWebhook(...)` — a third-party HTTP call with a
+  // 5s timeout — inside the telemetry flush. One slow endpoint delayed ingest
+  // for every organisation and a failure left no record. The outbox worker
+  // delivers and retries; this path only writes a row.
   await Promise.allSettled(
     webhooks.map(async (webhook) => {
       const last = webhook.lastAlertedThreshold;
 
       if (currentThreshold !== null && (last === null || currentThreshold > last)) {
         // Threshold reached or increased (e.g. from 80% to 100%)
-        await dispatchWebhook(webhook, 'quota.threshold_reached', {
+        await enqueueWebhookEvent({
           orgId,
-          threshold: currentThreshold,
-          currentUsage: count,
-          limit,
-          windowSeconds: plan.windowSeconds,
+          webhookId: webhook.id,
+          event: 'quota.threshold_reached',
+          payload: {
+            orgId,
+            threshold: currentThreshold,
+            currentUsage: count,
+            limit,
+            windowSeconds: plan.windowSeconds,
+          },
         });
 
         await db
