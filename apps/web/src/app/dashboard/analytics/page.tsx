@@ -24,7 +24,11 @@ export default function AnalyticsDashboardPage() {
   const PAGE_SIZE = 20;
 
   // 1. Overview metrics
-  const { data: overview, isLoading: overviewLoading, refetch: refetchOverview } = useQuery({
+  const {
+    data: overview,
+    isLoading: overviewLoading,
+    refetch: refetchOverview,
+  } = useQuery({
     queryKey: ['analytics-overview', range],
     queryFn: () => api.getAnalyticsOverview(range),
     refetchInterval: 10_000,
@@ -52,7 +56,11 @@ export default function AnalyticsDashboardPage() {
   });
 
   // 5. Recent Request Logs
-  const { data: logsData, isLoading: logsLoading, refetch: refetchLogs } = useQuery({
+  const {
+    data: logsData,
+    isLoading: logsLoading,
+    refetch: refetchLogs,
+  } = useQuery({
     queryKey: ['analytics-logs', logsPage],
     queryFn: () => api.getAnalyticsLogs(PAGE_SIZE, logsPage * PAGE_SIZE),
     refetchInterval: 5_000,
@@ -65,11 +73,16 @@ export default function AnalyticsDashboardPage() {
   });
 
   // Webhook Mutations
+  // The signing secret is write-only: the server returns it once, on create,
+  // and never again. Keep it just long enough to show the user, then drop it.
+  const [revealedSecret, setRevealedSecret] = useState<string | null>(null);
+
   const createWebhookMutation = useMutation({
     mutationFn: (body: { url: string; secret?: string }) => api.createWebhook(body),
-    onSuccess: () => {
+    onSuccess: (created) => {
       setNewWebhookUrl('');
       setNewWebhookSecret('');
+      setRevealedSecret(created.secret);
       refetchWebhooks();
     },
   });
@@ -117,7 +130,9 @@ export default function AnalyticsDashboardPage() {
       <div className="analytics-toolbar">
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700 }}>Telemetry & Analytics</h2>
+            <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700 }}>
+              Telemetry & Analytics
+            </h2>
             <span
               style={{
                 fontSize: '0.6875rem',
@@ -312,11 +327,7 @@ export default function AnalyticsDashboardPage() {
             </div>
           </div>
 
-          <UsageSvgChart
-            series={usageData?.series ?? []}
-            isLoading={usageLoading}
-            range={range}
-          />
+          <UsageSvgChart series={usageData?.series ?? []} isLoading={usageLoading} range={range} />
         </div>
 
         {/* Chart 2: Latency Percentiles (p50, p95, p99) */}
@@ -419,14 +430,15 @@ export default function AnalyticsDashboardPage() {
                     border: '1px solid var(--border)',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
-                    <span
-                      className={
-                        item.statusCode === 429
-                          ? 'log-badge-429'
-                          : 'log-badge-4xx'
-                      }
-                    >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <span className={item.statusCode === 429 ? 'log-badge-429' : 'log-badge-4xx'}>
                       {item.statusCode}
                     </span>
                     <span
@@ -505,20 +517,41 @@ export default function AnalyticsDashboardPage() {
           </div>
         ) : !logsData?.logs || logsData.logs.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: 'var(--muted)' }}>
-            No request logs recorded yet. Send requests with an API key to `/mock/:serviceSlug/*` to populate telemetry.
+            No request logs recorded yet. Send requests with an API key to `/mock/:serviceSlug/*` to
+            populate telemetry.
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem' }}>
               <thead>
-                <tr style={{ background: '#0d1117', borderBottom: '1px solid var(--border)', textAlign: 'left' }}>
-                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>Time</th>
-                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>Method</th>
-                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>Endpoint</th>
-                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>Status</th>
-                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>Latency</th>
-                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>API Key</th>
-                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>Trace ID</th>
+                <tr
+                  style={{
+                    background: '#0d1117',
+                    borderBottom: '1px solid var(--border)',
+                    textAlign: 'left',
+                  }}
+                >
+                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>
+                    Time
+                  </th>
+                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>
+                    Method
+                  </th>
+                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>
+                    Endpoint
+                  </th>
+                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>
+                    Status
+                  </th>
+                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>
+                    Latency
+                  </th>
+                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>
+                    API Key
+                  </th>
+                  <th style={{ padding: '10px 16px', color: 'var(--muted)', fontWeight: 500 }}>
+                    Trace ID
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -540,9 +573,18 @@ export default function AnalyticsDashboardPage() {
                   return (
                     <tr
                       key={log.traceId}
-                      style={{ borderBottom: '1px solid #161b24', transition: 'background 0.1s ease' }}
+                      style={{
+                        borderBottom: '1px solid #161b24',
+                        transition: 'background 0.1s ease',
+                      }}
                     >
-                      <td style={{ padding: '10px 16px', fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>
+                      <td
+                        style={{
+                          padding: '10px 16px',
+                          fontFamily: 'var(--font-mono)',
+                          color: 'var(--muted)',
+                        }}
+                      >
                         {formattedTime}
                       </td>
                       <td style={{ padding: '10px 16px' }}>
@@ -570,12 +612,23 @@ export default function AnalyticsDashboardPage() {
                         style={{
                           padding: '10px 16px',
                           fontFamily: 'var(--font-mono)',
-                          color: log.latencyMs > 500 ? 'var(--danger)' : log.latencyMs > 100 ? '#f59e0b' : 'inherit',
+                          color:
+                            log.latencyMs > 500
+                              ? 'var(--danger)'
+                              : log.latencyMs > 100
+                                ? '#f59e0b'
+                                : 'inherit',
                         }}
                       >
                         {log.latencyMs} ms
                       </td>
-                      <td style={{ padding: '10px 16px', fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>
+                      <td
+                        style={{
+                          padding: '10px 16px',
+                          fontFamily: 'var(--font-mono)',
+                          color: 'var(--muted)',
+                        }}
+                      >
                         {log.keyDisplay ?? 'Anonymous'}
                       </td>
                       <td style={{ padding: '10px 16px' }}>
@@ -584,7 +637,8 @@ export default function AnalyticsDashboardPage() {
                           style={{
                             background: 'none',
                             border: 'none',
-                            color: copiedTraceId === log.traceId ? 'var(--success)' : 'var(--muted)',
+                            color:
+                              copiedTraceId === log.traceId ? 'var(--success)' : 'var(--muted)',
                             fontFamily: 'var(--font-mono)',
                             fontSize: '0.75rem',
                             cursor: 'pointer',
@@ -592,7 +646,9 @@ export default function AnalyticsDashboardPage() {
                           }}
                           title="Click to copy Trace ID"
                         >
-                          {copiedTraceId === log.traceId ? 'Copied!' : `${log.traceId.slice(0, 12)}…`}
+                          {copiedTraceId === log.traceId
+                            ? 'Copied!'
+                            : `${log.traceId.slice(0, 12)}…`}
                         </button>
                       </td>
                     </tr>
@@ -618,14 +674,19 @@ export default function AnalyticsDashboardPage() {
             }}
           >
             <span className="muted">
-              Showing {logsPage * PAGE_SIZE + 1}–{Math.min((logsPage + 1) * PAGE_SIZE, logsData.total)} of {logsData.total}
+              Showing {logsPage * PAGE_SIZE + 1}–
+              {Math.min((logsPage + 1) * PAGE_SIZE, logsData.total)} of {logsData.total}
             </span>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <button
                 className="secondary-button"
                 onClick={() => setLogsPage((p) => Math.max(0, p - 1))}
                 disabled={logsPage === 0}
-                style={{ padding: '4px 12px', fontSize: '0.75rem', cursor: logsPage === 0 ? 'not-allowed' : 'pointer' }}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: '0.75rem',
+                  cursor: logsPage === 0 ? 'not-allowed' : 'pointer',
+                }}
               >
                 Previous
               </button>
@@ -678,7 +739,8 @@ export default function AnalyticsDashboardPage() {
             </div>
 
             <p className="muted" style={{ fontSize: '0.875rem', margin: '0 0 20px' }}>
-              Configure endpoints that receive signed HMAC-SHA256 HTTP POST notifications when your organization consumes 80% or 100% of its rate limit quota.
+              Configure endpoints that receive signed HMAC-SHA256 HTTP POST notifications when your
+              organization consumes 80% or 100% of its rate limit quota.
             </p>
 
             {/* List Existing Webhooks */}
@@ -702,7 +764,13 @@ export default function AnalyticsDashboardPage() {
                         gap: '8px',
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                        }}
+                      >
                         <span
                           style={{
                             fontFamily: 'var(--font-mono)',
@@ -749,14 +817,20 @@ export default function AnalyticsDashboardPage() {
                         }}
                       >
                         <span>
-                          Secret: <code style={{ fontFamily: 'var(--font-mono)' }}>{wh.secret.slice(0, 14)}…</code>
+                          Secret:{' '}
+                          <code style={{ fontFamily: 'var(--font-mono)' }}>{wh.secretPreview}</code>{' '}
+                          <span style={{ opacity: 0.7 }}>
+                            ({wh.hasCustomSecret ? 'custom, write-only' : 'generated, write-only'})
+                          </span>
                         </span>
                         {wh.lastAlertedThreshold ? (
                           <span style={{ color: '#f59e0b', fontWeight: 600 }}>
                             ⚠️ Alerted at {wh.lastAlertedThreshold}% threshold
                           </span>
                         ) : (
-                          <span style={{ color: 'var(--success)' }}>✓ Operational (Monitoring)</span>
+                          <span style={{ color: 'var(--success)' }}>
+                            ✓ Operational (Monitoring)
+                          </span>
                         )}
                       </div>
 
@@ -793,10 +867,58 @@ export default function AnalyticsDashboardPage() {
                     fontSize: '0.8125rem',
                   }}
                 >
-                  No webhooks configured yet. Register one below to receive automated capacity alerts.
+                  No webhooks configured yet. Register one below to receive automated capacity
+                  alerts.
                 </div>
               )}
             </div>
+
+            {/* One-time reveal of a server-generated signing secret */}
+            {revealedSecret && (
+              <div
+                role="alert"
+                style={{
+                  border: '1px solid rgba(245, 158, 11, 0.4)',
+                  background: 'rgba(245, 158, 11, 0.08)',
+                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
+                }}
+              >
+                <strong style={{ fontSize: '0.8125rem', color: '#f59e0b' }}>
+                  Copy this signing secret now — it will not be shown again
+                </strong>
+                <code
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.8125rem',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {revealedSecret}
+                </code>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  style={{ alignSelf: 'flex-start', padding: '4px 10px', fontSize: '0.75rem' }}
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(revealedSecret);
+                  }}
+                >
+                  Copy secret
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  style={{ alignSelf: 'flex-start', padding: '4px 10px', fontSize: '0.75rem' }}
+                  onClick={() => setRevealedSecret(null)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
 
             {/* Add New Webhook Form */}
             <form
@@ -821,7 +943,14 @@ export default function AnalyticsDashboardPage() {
               </h4>
 
               <div>
-                <label style={{ display: 'block', fontSize: '0.75rem', color: 'var(--muted)', marginBottom: '4px' }}>
+                <label
+                  style={{
+                    display: 'block',
+                    fontSize: '0.75rem',
+                    color: 'var(--muted)',
+                    marginBottom: '4px',
+                  }}
+                >
                   Target Webhook URL
                 </label>
                 <input
@@ -835,7 +964,14 @@ export default function AnalyticsDashboardPage() {
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '0.75rem', color: 'var(--muted)', marginBottom: '4px' }}>
+                <label
+                  style={{
+                    display: 'block',
+                    fontSize: '0.75rem',
+                    color: 'var(--muted)',
+                    marginBottom: '4px',
+                  }}
+                >
                   HMAC Secret (optional, auto-generated if left empty)
                 </label>
                 <input
@@ -883,14 +1019,17 @@ function UsageSvgChart({
     const padding = 20;
 
     const firstBucketTime = series[0]?.bucket ? new Date(series[0].bucket).getTime() : 0;
-    const lastBucketTime = series[series.length - 1]?.bucket ? new Date(series[series.length - 1]!.bucket).getTime() : 0;
+    const lastBucketTime = series[series.length - 1]?.bucket
+      ? new Date(series[series.length - 1]!.bucket).getTime()
+      : 0;
     const timeSpan = Math.max(lastBucketTime - firstBucketTime, 1);
 
     const points = series.map((item) => {
       const t = new Date(item.bucket).getTime();
-      const x = series.length === 1
-        ? width / 2
-        : padding + ((t - firstBucketTime) / timeSpan) * (width - padding * 2);
+      const x =
+        series.length === 1
+          ? width / 2
+          : padding + ((t - firstBucketTime) / timeSpan) * (width - padding * 2);
       const y = height - (item.requests / maxVal) * (height - 30);
       const errorY = height - (item.errors / maxVal) * (height - 30);
       return { x, y, errorY, item };
@@ -910,7 +1049,15 @@ function UsageSvgChart({
 
   if (isLoading) {
     return (
-      <div className="chart-svg-wrap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>
+      <div
+        className="chart-svg-wrap"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--muted)',
+        }}
+      >
         Loading timeseries...
       </div>
     );
@@ -918,7 +1065,16 @@ function UsageSvgChart({
 
   if (!chartPoints || series.length === 0) {
     return (
-      <div className="chart-svg-wrap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)', fontSize: '0.8125rem' }}>
+      <div
+        className="chart-svg-wrap"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--muted)',
+          fontSize: '0.8125rem',
+        }}
+      >
         No traffic telemetry recorded yet.
       </div>
     );
@@ -945,7 +1101,13 @@ function UsageSvgChart({
         {/* Area & Lines */}
         <path d={chartPoints.areaD} fill="url(#usageGradient)" />
         <path d={chartPoints.lineD} fill="none" stroke="#5b8cff" strokeWidth="2.5" />
-        <path d={chartPoints.errorLineD} fill="none" stroke="#ff6b6b" strokeWidth="1.8" strokeDasharray="2 2" />
+        <path
+          d={chartPoints.errorLineD}
+          fill="none"
+          stroke="#ff6b6b"
+          strokeWidth="1.8"
+          strokeDasharray="2 2"
+        />
 
         {/* Data points */}
         {chartPoints.points.map((p, idx) => (
@@ -965,12 +1127,25 @@ function UsageSvgChart({
         {/* Bottom time labels */}
         {series[0] && (
           <text x="20" y="168" fill="#586074" fontSize="10" fontFamily="var(--font-mono)">
-            {new Date(series[0].bucket).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            {new Date(series[0].bucket).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
           </text>
         )}
         {series[series.length - 1] && (
-          <text x="540" y="168" fill="#586074" fontSize="10" textAnchor="end" fontFamily="var(--font-mono)">
-            {new Date(series[series.length - 1]!.bucket).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          <text
+            x="540"
+            y="168"
+            fill="#586074"
+            fontSize="10"
+            textAnchor="end"
+            fontFamily="var(--font-mono)"
+          >
+            {new Date(series[series.length - 1]!.bucket).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
           </text>
         )}
       </svg>
@@ -994,14 +1169,17 @@ function LatencySvgChart({
     const padding = 20;
 
     const firstBucketTime = series[0]?.bucket ? new Date(series[0].bucket).getTime() : 0;
-    const lastBucketTime = series[series.length - 1]?.bucket ? new Date(series[series.length - 1]!.bucket).getTime() : 0;
+    const lastBucketTime = series[series.length - 1]?.bucket
+      ? new Date(series[series.length - 1]!.bucket).getTime()
+      : 0;
     const timeSpan = Math.max(lastBucketTime - firstBucketTime, 1);
 
     const points = series.map((item) => {
       const t = new Date(item.bucket).getTime();
-      const x = series.length === 1
-        ? width / 2
-        : padding + ((t - firstBucketTime) / timeSpan) * (width - padding * 2);
+      const x =
+        series.length === 1
+          ? width / 2
+          : padding + ((t - firstBucketTime) / timeSpan) * (width - padding * 2);
       const yP50 = height - (item.p50 / maxVal) * (height - 30);
       const yP95 = height - (item.p95 / maxVal) * (height - 30);
       const yP99 = height - (item.p99 / maxVal) * (height - 30);
@@ -1017,7 +1195,15 @@ function LatencySvgChart({
 
   if (isLoading) {
     return (
-      <div className="chart-svg-wrap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>
+      <div
+        className="chart-svg-wrap"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--muted)',
+        }}
+      >
         Loading latency metrics...
       </div>
     );
@@ -1025,7 +1211,16 @@ function LatencySvgChart({
 
   if (!chartPoints || series.length === 0) {
     return (
-      <div className="chart-svg-wrap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)', fontSize: '0.8125rem' }}>
+      <div
+        className="chart-svg-wrap"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--muted)',
+          fontSize: '0.8125rem',
+        }}
+      >
         No latency data recorded in this range.
       </div>
     );
@@ -1050,12 +1245,25 @@ function LatencySvgChart({
         {/* Bottom time labels */}
         {series[0] && (
           <text x="20" y="168" fill="#586074" fontSize="10" fontFamily="var(--font-mono)">
-            {new Date(series[0].bucket).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            {new Date(series[0].bucket).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
           </text>
         )}
         {series[series.length - 1] && (
-          <text x="540" y="168" fill="#586074" fontSize="10" textAnchor="end" fontFamily="var(--font-mono)">
-            {new Date(series[series.length - 1]!.bucket).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          <text
+            x="540"
+            y="168"
+            fill="#586074"
+            fontSize="10"
+            textAnchor="end"
+            fontFamily="var(--font-mono)"
+          >
+            {new Date(series[series.length - 1]!.bucket).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
           </text>
         )}
       </svg>

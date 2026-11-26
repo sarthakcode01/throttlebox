@@ -1,17 +1,56 @@
+import { randomBytes } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/client.js';
 import { orgMembers, orgs, users } from '../db/schema.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
-import { createSession, destroySession, CSRF_COOKIE, SESSION_COOKIE } from '../auth/session.js';
+import {
+  createSession,
+  destroyAllSessionsForUser,
+  destroySession,
+  CSRF_COOKIE,
+  SESSION_COOKIE,
+} from '../auth/session.js';
 import { seedFlagshipService } from '../mock/seed.js';
 import { createRateLimit } from '../http/rateLimit.js';
 import { config, isProduction, isTest } from '../config.js';
 
+/**
+ * Password policy for anything that sets a password (register, reset).
+ *
+ * Length does the heavy lifting — a 12-character minimum with no forced
+ * character classes is stronger than a shorter password full of symbols, and
+ * it does not push users towards predictable substitutions. The blocklist
+ * catches the handful of passwords that defeat a length rule on their own.
+ */
+const COMMON_PASSWORDS = new Set([
+  'password',
+  'password1',
+  'password123',
+  'passw0rd',
+  '1234567890',
+  '12345678901',
+  '123456789012',
+  'qwertyuiop',
+  'qwerty12345',
+  'letmein12345',
+  'welcome12345',
+  'admin12345',
+  'iloveyou123',
+  'changeme123',
+  'throttlebox',
+]);
+
+const passwordSchema = z
+  .string()
+  .min(12, 'Password must be at least 12 characters')
+  .max(200)
+  .refine((v) => !COMMON_PASSWORDS.has(v.toLowerCase()), 'That password is too common');
+
 const registerSchema = z.object({
   email: z.string().email().max(320),
-  password: z.string().min(10).max(200),
+  password: passwordSchema,
   name: z.string().min(1).max(120),
 });
 
@@ -20,12 +59,23 @@ const loginSchema = z.object({
   password: z.string().min(1).max(200),
 });
 
+/**
+ * Cookie names.
+ *
+ * In production the session cookie uses the `__Host-` prefix: the browser will
+ * then refuse to accept it from anything but the exact origin, over HTTPS,
+ * with no `Domain` attribute — so a compromised sibling subdomain cannot
+ * overwrite the session cookie. That also removes the need for COOKIE_DOMAIN,
+ * which is why the domain is no longer set on the production cookie.
+ */
+const SESSION_COOKIE_NAME = isProduction ? `__Host-${SESSION_COOKIE}` : SESSION_COOKIE;
+const CSRF_COOKIE_NAME = isProduction ? `__Host-${CSRF_COOKIE}` : CSRF_COOKIE;
+
 const cookieOptions = {
   httpOnly: true,
   secure: isProduction,
   sameSite: 'lax',
   path: '/',
-  domain: isProduction ? config.COOKIE_DOMAIN : undefined,
 } as const;
 
 /**
@@ -39,16 +89,35 @@ const csrfCookieOptions = {
   secure: isProduction,
   sameSite: 'lax',
   path: '/',
-  domain: isProduction ? config.COOKIE_DOMAIN : undefined,
 } as const;
 
 /**
- * A pre-computed Argon2id hash of a random string. Verifying against it when
- * no user is found keeps the login timing profile flat, so response time
- * doesn't reveal whether an email is registered.
+ * The CSRF cookie must outlive the browser session exactly as long as the
+ * session cookie does. It previously had no `expires` at all, so after a
+ * browser restart the session survived and every mutation 403'd until the
+ * user signed in again.
  */
-const DUMMY_HASH =
-  '$argon2id$v=19$m=19456,t=2,p=1$Y2FuYXJ5c2FsdGJhc2U$8Q1Yn0F8B7lKl2Fh2vGzUu0VbY0n1q3Pz8rXk4mY6sJg';
+function csrfCookieOptionsFor(expires: Date): typeof csrfCookieOptions & { expires: Date } {
+  return { ...csrfCookieOptions, expires };
+}
+
+/**
+ * A real Argon2id hash of a random string, produced at boot.
+ *
+ * Verifying against it when no user is found keeps the login timing profile
+ * flat, so response time does not reveal whether an email is registered.
+ *
+ * It must be generated here rather than hard-coded: a hand-written constant
+ * with a salt of a different length verifies noticeably faster or slower than
+ * a production hash, which turns the equalizer into the oracle it exists to
+ * prevent. Generating it with `hashPassword` guarantees identical parameters.
+ */
+let dummyHashPromise: Promise<string> | null = null;
+
+function dummyHash(): Promise<string> {
+  dummyHashPromise ??= hashPassword(randomBytes(32).toString('hex'));
+  return dummyHashPromise;
+}
 
 /**
  * Brute-force protection for the credential endpoints.
@@ -59,14 +128,18 @@ const DUMMY_HASH =
  * otherwise the endpoint is a free way to fill the database and burn CPU on
  * password hashing.
  *
- * The limit is disabled under NODE_ENV=test so the suite is not throttled by
- * its own fixtures; the limiter itself is covered by a dedicated test.
+ * In tests the ceiling is raised rather than removed. Disabling it entirely
+ * meant the limiter's wiring was never exercised by an integration test — a
+ * regression there would have gone unnoticed by CI. A high ceiling keeps the
+ * fixtures running while leaving the code path live.
  */
+const authRateLimitMax = isTest ? 10_000 : config.AUTH_RATE_LIMIT_MAX;
+
 const authRateLimiter = createRateLimit({
-  max: config.AUTH_RATE_LIMIT_MAX,
+  max: authRateLimitMax,
   windowMs: config.AUTH_RATE_LIMIT_WINDOW_SECONDS * 1000,
   keyGenerator: (request) => `auth:${request.ip}`,
-  enabled: !isTest,
+  prefix: 'ratelimit:auth',
   message: 'Too many attempts. Please wait and try again.',
 });
 
@@ -143,11 +216,11 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       await seedFlagshipService(org.id);
 
       reply
-        .setCookie(SESSION_COOKIE, session.token, {
+        .setCookie(SESSION_COOKIE_NAME, session.token, {
           ...cookieOptions,
           expires: session.expiresAt,
         })
-        .setCookie(CSRF_COOKIE, session.csrfToken, csrfCookieOptions);
+        .setCookie(CSRF_COOKIE_NAME, session.csrfToken, csrfCookieOptionsFor(session.expiresAt));
 
       return reply.code(201).send({ user, org });
     },
@@ -172,7 +245,9 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       .limit(1);
 
     // Always run a verify to avoid leaking whether the email exists via timing.
-    const hash = user?.passwordHash ?? DUMMY_HASH;
+    // The dummy hash has the same parameters as a real one, so a miss and a hit
+    // cost the same.
+    const hash = user?.passwordHash ?? (await dummyHash());
     const valid = await verifyPassword(password, hash);
 
     if (!user || !valid) {
@@ -207,23 +282,100 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     });
 
     reply
-      .setCookie(SESSION_COOKIE, session.token, {
+      .setCookie(SESSION_COOKIE_NAME, session.token, {
         ...cookieOptions,
         expires: session.expiresAt,
       })
-      .setCookie(CSRF_COOKIE, session.csrfToken, csrfCookieOptions);
+      .setCookie(CSRF_COOKIE_NAME, session.csrfToken, csrfCookieOptionsFor(session.expiresAt));
 
     return reply.send({ user: { id: user.id, email: user.email, name: user.name } });
   });
 
   // ---- Logout ---------------------------------------------------------
   fastify.post('/auth/logout', async (request, reply) => {
-    const token = request.cookies[SESSION_COOKIE];
+    const token = request.cookies[SESSION_COOKIE_NAME];
     if (token) {
       await destroySession(token);
     }
-    reply.clearCookie(SESSION_COOKIE, { path: '/' }).clearCookie(CSRF_COOKIE, { path: '/' });
+    reply
+      .clearCookie(SESSION_COOKIE_NAME, { path: '/' })
+      .clearCookie(CSRF_COOKIE_NAME, { path: '/' });
     return reply.send({ ok: true });
+  });
+
+  // ---- Password change / sign out everywhere --------------------------
+  //
+  // Until now the only way out of a session was to log out of it, and
+  // `destroyAllSessionsForUser` was unreachable. Both endpoints below are
+  // rate limited like the other credential operations: they either verify a
+  // password or are the response to a suspected compromise.
+
+  const changePasswordSchema = z.object({
+    currentPassword: z.string().min(1).max(200),
+    newPassword: passwordSchema,
+  });
+
+  fastify.post(
+    '/auth/password',
+    { preHandler: [authRateLimiter.handler] },
+    async (request, reply) => {
+      const auth = request.auth;
+      if (!auth) {
+        return reply.code(401).send({ error: 'unauthorized', message: 'Authentication required' });
+      }
+
+      const parsed = changePasswordSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: 'validation_error',
+          message: parsed.error.issues[0]?.message ?? 'Invalid input',
+        });
+      }
+
+      const [user] = await db
+        .select({ id: users.id, passwordHash: users.passwordHash })
+        .from(users)
+        .where(eq(users.id, auth.userId))
+        .limit(1);
+      if (!user) {
+        return reply.code(401).send({ error: 'unauthorized', message: 'Authentication required' });
+      }
+
+      if (!(await verifyPassword(parsed.data.currentPassword, user.passwordHash))) {
+        return reply
+          .code(403)
+          .send({ error: 'invalid_password', message: 'Current password is incorrect' });
+      }
+
+      await db
+        .update(users)
+        .set({ passwordHash: await hashPassword(parsed.data.newPassword) })
+        .where(eq(users.id, user.id));
+
+      // Every other session is now suspect, including the one that made the
+      // request: changing a password must end all of them, so the client is
+      // signed out and has to authenticate with the new password.
+      await destroyAllSessionsForUser(user.id);
+
+      return reply
+        .clearCookie(SESSION_COOKIE_NAME, { path: '/' })
+        .clearCookie(CSRF_COOKIE_NAME, { path: '/' })
+        .send({ ok: true, message: 'Password changed. Sign in again with the new password.' });
+    },
+  );
+
+  fastify.post('/auth/sessions/revoke-all', async (request, reply) => {
+    const auth = request.auth;
+    if (!auth) {
+      return reply.code(401).send({ error: 'unauthorized', message: 'Authentication required' });
+    }
+
+    const revoked = await destroyAllSessionsForUser(auth.userId);
+
+    return reply
+      .clearCookie(SESSION_COOKIE_NAME, { path: '/' })
+      .clearCookie(CSRF_COOKIE_NAME, { path: '/' })
+      .send({ ok: true, revoked });
   });
 
   // ---- Current session -----------------------------------------------

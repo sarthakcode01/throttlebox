@@ -1,4 +1,6 @@
+import { lt } from 'drizzle-orm';
 import { db } from '../db/client.js';
+import { redis } from '../db/redis.js';
 import { apiKeyEvents } from '../db/schema.js';
 
 export const API_KEY_EVENTS = [
@@ -71,4 +73,65 @@ export async function recordEventSafe(input: RecordEventInput): Promise<void> {
   } catch {
     // Intentionally swallowed — see the note on `auth_failed` above.
   }
+}
+
+/**
+ * How long to suppress a repeat of the same failure for the same key.
+ *
+ * A `public_id` is not secret — it appears in the display prefix and in logs —
+ * so anyone can trigger one `auth_failed` INSERT per request by sending the
+ * wrong secret, and the rate limiter runs *after* verification, so it does not
+ * cover this path. One row per key per minute keeps the audit trail useful
+ * (the first failure of a burst is recorded) while removing the write
+ * amplification.
+ */
+const DEDUPE_WINDOW_SECONDS = 60;
+
+/**
+ * Record an authentication failure at most once per key, per reason, per window.
+ *
+ * The marker lives in Redis rather than in memory so the suppression is
+ * consistent across instances — otherwise N replicas would each write one row.
+ * If Redis is unavailable the event is written: losing an audit row is worse
+ * than a duplicate.
+ */
+export async function recordFailureThrottled(input: RecordEventInput): Promise<void> {
+  // Only the events an unauthenticated caller can trigger are de-duplicated;
+  // a user-initiated `revoked` must always be recorded.
+  if (input.event !== 'auth_failed' && input.event !== 'expired') {
+    await recordEventSafe(input);
+    return;
+  }
+
+  const reason = String(input.metadata?.['reason'] ?? 'unknown');
+  const marker = `audit:dedupe:${input.keyId ?? input.familyId ?? input.orgId}:${input.event}:${reason}`;
+
+  try {
+    const first = await redis.set(marker, '1', 'EX', DEDUPE_WINDOW_SECONDS, 'NX');
+    if (first === null) return;
+  } catch {
+    // Redis down: fall through and record the event.
+  }
+
+  await recordEventSafe(input);
+}
+
+/**
+ * Retention for the audit trail.
+ *
+ * The table is append-only by design, which is why it needs a bound: without
+ * one, a single attacker who knows a public id can grow it indefinitely. Ninety
+ * days is long enough for an investigation and short enough to bound growth.
+ */
+export const AUDIT_RETENTION_DAYS = 90;
+
+export async function purgeOldAuditEvents(
+  retentionDays: number = AUDIT_RETENTION_DAYS,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const deleted = await db
+    .delete(apiKeyEvents)
+    .where(lt(apiKeyEvents.createdAt, cutoff))
+    .returning({ id: apiKeyEvents.id });
+  return deleted.length;
 }

@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { isProduction } from '../config.js';
 import { z } from 'zod';
 import {
   getErrorsBreakdown,
@@ -11,10 +12,10 @@ import type { TimeRange } from '../analytics/types.js';
 import {
   createOrgWebhook,
   deleteOrgWebhook,
-  isValidWebhookUrl,
   listOrgWebhooks,
   testOrgWebhook,
 } from '../analytics/webhooks.js';
+import { resolveWebhookTarget } from '../analytics/webhookGuard.js';
 
 const rangeSchema = z.enum(['1h', '24h', '7d', '30d']).default('24h');
 
@@ -133,15 +134,19 @@ export const analyticsRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const urlCheck = isValidWebhookUrl(parsed.data.url);
-      if (!urlCheck.valid) {
+      // Resolve the host now and refuse when any address it maps to is one this
+      // process must not reach. Checking at creation means a bad destination is
+      // rejected with a clear reason instead of failing silently on first use;
+      // delivery re-checks anyway, because DNS is not a stable fact.
+      const target = await resolveWebhookTarget(parsed.data.url, { allowHttp: !isProduction });
+      if (!target.ok) {
         return reply.code(400).send({
           error: 'invalid_webhook_url',
-          message: urlCheck.reason ?? 'Webhook URL is not permitted for security reasons',
+          message: target.reason,
         });
       }
 
-      const webhook = await createOrgWebhook(orgId, parsed.data.url, parsed.data.secret);
+      const webhook = await createOrgWebhook(orgId, target.target.url, parsed.data.secret);
       return reply.code(201).send(webhook);
     },
   );

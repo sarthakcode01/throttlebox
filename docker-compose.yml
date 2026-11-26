@@ -5,8 +5,11 @@ services:
     image: timescale/timescaledb:latest-pg16
     container_name: throttlebox-postgres
     restart: unless-stopped
+    # Bound to loopback: this container holds the only copy of the data and
+    # has a default password. Publishing it on all interfaces puts an
+    # unauthenticated-by-network database on whatever host runs it.
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -23,8 +26,10 @@ services:
     image: redis:7-alpine
     container_name: throttlebox-redis
     restart: unless-stopped
+    # Loopback only. Redis has no auth configured here, so anyone who can reach
+    # the port controls sessions, the key cache and the rate limiter.
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
     volumes:
       - redis-data:/data
     healthcheck:

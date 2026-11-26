@@ -15,7 +15,34 @@ interface LocalCacheEntry {
   expiresAt: number;
 }
 
+/**
+ * The in-process tier cache.
+ *
+ * Every entry expires after 30 s, but an expired entry is only removed when the
+ * same org is looked up again. Orgs that go quiet therefore stay in the map
+ * forever, and the process accumulates one entry per org it has ever seen.
+ *
+ * Bounded instead: keys are approximately recency-ordered (every read that hits
+ * a live entry re-inserts it, and `Map` preserves insertion order), so the
+ * oldest key is the first to go. A capacity that is larger than any realistic
+ * working set keeps the hit rate intact.
+ */
+const TIER_CACHE_MAX_ENTRIES = 10_000;
+
 const localTierCache = new Map<string, LocalCacheEntry>();
+
+function cacheTier(orgId: string, entry: LocalCacheEntry): void {
+  // Re-insert so this key moves to the end: the eviction order is what keeps
+  // the bound from evicting the hot set.
+  localTierCache.delete(orgId);
+  localTierCache.set(orgId, entry);
+
+  while (localTierCache.size > TIER_CACHE_MAX_ENTRIES) {
+    const oldest = localTierCache.keys().next();
+    if (oldest.done) break;
+    localTierCache.delete(oldest.value);
+  }
+}
 
 function tierRedisKey(orgId: string): string {
   return `tier:org:${orgId}`;
@@ -111,15 +138,18 @@ export async function getOrgPlan(orgId: string): Promise<PlanConfig> {
   // 1. In-memory check
   const local = localTierCache.get(orgId);
   if (local && local.expiresAt > now) {
+    cacheTier(orgId, local);
     return local.config;
   }
+  // Drop the stale entry rather than leaving it to be overwritten later.
+  localTierCache.delete(orgId);
 
   // 2. Redis cache check
   try {
     const cachedPlan = await redis.get(tierRedisKey(orgId));
     if (cachedPlan && cachedPlan in PLAN_CONFIGS) {
       const planConfig = PLAN_CONFIGS[cachedPlan as Plan];
-      localTierCache.set(orgId, {
+      cacheTier(orgId, {
         config: planConfig,
         expiresAt: now + TIER_CACHE_TTL_MS,
       });
@@ -148,7 +178,7 @@ export async function getOrgPlan(orgId: string): Promise<PlanConfig> {
   const planConfig = PLAN_CONFIGS[planName] ?? PLAN_CONFIGS.free;
 
   // Populate local and Redis cache
-  localTierCache.set(orgId, {
+  cacheTier(orgId, {
     config: planConfig,
     expiresAt: now + TIER_CACHE_TTL_MS,
   });

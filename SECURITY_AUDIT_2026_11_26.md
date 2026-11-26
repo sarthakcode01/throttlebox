@@ -32,36 +32,36 @@ Two things I could **not** execute and therefore treat as code-read only: the mu
 
 Severity is assigned on realistic exploitability _in this codebase_, with a note wherever it differs from the previous audit.
 
-| ID     |   Sev   |   Phase    | Finding                                                                                    | Status                           |
-| :----- | :-----: | :--------: | :----------------------------------------------------------------------------------------- | :------------------------------- |
-| SEC-01 | 🔴 Crit | 7 / deploy | `next@15.5.27` — unauthenticated RCE in the Image Optimization API (SVG)                   | ✓ Verified (installed version)   |
-| SEC-02 | 🔴 Crit |     5      | Webhook SSRF guard bypassed by IPv4-mapped IPv6, NAT64 and redirects                       | ✓ Verified (PoC)                 |
-| SEC-03 | 🟠 High |     5      | Webhook HMAC signing secret returned on every read                                         | ✓ Verified (code)                |
-| SEC-04 | 🟠 High |     1      | Session expiry never enforced on the Redis hot path → sessions are immortal                | ✓ Verified (code)                |
-| SEC-05 | 🟠 High |     1      | Auth limiter is per-process, and is disabled in the environment CI runs                    | ✓ Verified (code)                |
-| SEC-06 | 🟠 High |     0      | `drizzle-orm@0.38.4` SQL-injection advisory (identifier escaping)                          | ✓ Verified · not reachable today |
-| SEC-07 | 🟠 High |    3/7     | Dashboard loads an **unpinned** third-party script from `unpkg.com`, no SRI, no CSP        | ✓ Verified (code)                |
-| SEC-08 | 🟡 Med  |     5      | No rate limit on dashboard `/api/*` → DB full scans and CPU amplification                  | ✓ Verified (code)                |
-| SEC-09 | 🟡 Med  |     1      | Role/org cached up to 7 days, never revalidated, no invalidation path                      | ✓ Verified (code)                |
-| SEC-10 | 🟡 Med  |     2      | Key cache stores `secretHash` in Redis and invalidates only locally                        | ✓ Verified (code)                |
-| SEC-11 | 🟡 Med  |     3      | `responseHeaders` map is unbounded → stored/returned amplification                         | ✓ Verified (PoC)                 |
-| SEC-12 | 🟡 Med  |     2      | `api_key_events` has no retention; bad-secret floods write synchronously                   | ✓ Verified (code)                |
-| SEC-13 | 🟡 Med  |     1      | Login "timing equalizer" is 1.8× slower than a real miss → user enumeration                | ✓ Verified (PoC)                 |
-| SEC-14 | 🟡 Med  |     5      | Webhook delivery has no queue and is awaited inside the ingest flush                       | ✓ Verified (code)                |
-| SEC-15 | 🟡 Med  |     1      | CORS origin list unvalidated; `*` silently produces a broken config                        | ✓ Verified (PoC)                 |
-| SEC-16 | 🟡 Med  |     1      | Open registration, min-10 password, no breach check, no email verification                 | ✓ Verified (code)                |
-| SEC-17 | 🟡 Med  |     1      | No HSTS, no CSP, no `Permissions-Policy`; cookies lack `__Host-` prefix                    | ✓ Verified (code)                |
-| SEC-18 | 🟡 Med  |     0      | `zod@3.25.76` memory-exhaustion advisory; `fastify@5.12.5` header-validation bypass        | ✓ Verified · limited reach       |
-| SEC-19 | 🟡 Med  |     0      | `X-Forwarded-For` hop-count trust feeds both the audit trail and the auth limiter          | ✓ Verified (code)                |
-| SEC-20 | 🟡 Med  |     0      | Error handler echoes `error.message` on every 4xx, in every environment                    | ✓ Verified (code)                |
-| SEC-21 | 🟢 Low  |     1      | `secure` cookie flag only in production; no `__Host-`/`__Secure-` prefixes                 | ✓ Verified                       |
-| SEC-22 | 🟢 Low  |     1      | CSRF skip-on-`Authorization` is sound today but couples to CORS; CSRF cookie has no expiry | ✓ Verified                       |
-| SEC-23 | 🟢 Low  |     1      | No session binding or absolute lifetime; password change is unreachable code               | ✓ Verified                       |
-| SEC-24 | 🟢 Low  |     7      | `getInternalToken()` is exported; the key-auth bypass is one string compare                | ✓ Verified                       |
-| SEC-25 | 🟢 Low  |     7      | Export writes request `Host` into generated tests; `redact()` doesn't cover `whsec_`       | ✓ Verified                       |
-| SEC-26 | 🟢 Low  |     0      | `docker-compose.yml` ships default credentials and publishes 5432/6379 on all interfaces   | ✓ Verified                       |
-| SEC-27 | 🟢 Low  |     1      | `SESSION_SECRET` is required and validated but never used                                  | ✓ Verified                       |
-| SEC-28 | 🟢 Low  |     6      | Chaos benchmark is an unthrottled CPU sampling loop                                        | ✓ Verified                       |
+| ID     |   Sev   |   Phase    | Finding                                                                                    | Status                                                    |
+| :----- | :-----: | :--------: | :----------------------------------------------------------------------------------------- | :-------------------------------------------------------- |
+| SEC-01 | 🔴 Crit | 7 / deploy | `next@15.5.27` — unauthenticated RCE in the Image Optimization API (SVG)                   | ✅ Fixed — `next@15.5.29`                                 |
+| SEC-02 | 🔴 Crit |     5      | Webhook SSRF guard bypassed by IPv4-mapped IPv6, NAT64 and redirects                       | ✅ Fixed — guard rewritten, bypasses closed               |
+| SEC-03 | 🟠 High |     5      | Webhook HMAC signing secret returned on every read                                         | ✅ Fixed — write-only secret                              |
+| SEC-04 | 🟠 High |     1      | Session expiry never enforced on the Redis hot path → sessions are immortal                | ✅ Fixed — absolute deadline enforced                     |
+| SEC-05 | 🟠 High |     1      | Auth limiter is per-process, and is disabled in the environment CI runs                    | ✅ Fixed — Redis-backed shared counter                    |
+| SEC-06 | 🟠 High |     0      | `drizzle-orm@0.38.4` SQL-injection advisory (identifier escaping)                          | ✅ Fixed — `drizzle-orm@0.45.4`                           |
+| SEC-07 | 🟠 High |    3/7     | Dashboard loads an **unpinned** third-party script from `unpkg.com`, no SRI, no CSP        | ✅ Fixed — pinned version + SRI                           |
+| SEC-08 | 🟡 Med  |     5      | No rate limit on dashboard `/api/*` → DB full scans and CPU amplification                  | ✅ Fixed — per-user `/api` limiter                        |
+| SEC-09 | 🟡 Med  |     1      | Role/org cached up to 7 days, never revalidated, no invalidation path                      | ✅ Fixed — role read per request                          |
+| SEC-10 | 🟡 Med  |     2      | Key cache stores `secretHash` in Redis and invalidates only locally                        | ✅ Fixed — no `secretHash` in Redis, pub/sub invalidation |
+| SEC-11 | 🟡 Med  |     3      | `responseHeaders` map is unbounded → stored/returned amplification                         | ✅ Fixed — allowlist + 20-key cap                         |
+| SEC-12 | 🟡 Med  |     2      | `api_key_events` has no retention; bad-secret floods write synchronously                   | ✅ Fixed — dedupe + 90-day retention                      |
+| SEC-13 | 🟡 Med  |     1      | Login "timing equalizer" is 1.8× slower than a real miss → user enumeration                | ✅ Fixed — Argon2id dummy hash                            |
+| SEC-14 | 🟡 Med  |     5      | Webhook delivery has no queue and is awaited inside the ingest flush                       | ✅ Fixed — durable outbox worker                          |
+| SEC-15 | 🟡 Med  |     1      | CORS origin list unvalidated; `*` silently produces a broken config                        | ✅ Fixed — validated at boot                              |
+| SEC-16 | 🟡 Med  |     1      | Open registration, min-10 password, no breach check, no email verification                 | ✅ Fixed — policy + password change endpoint              |
+| SEC-17 | 🟡 Med  |     1      | No HSTS, no CSP, no `Permissions-Policy`; cookies lack `__Host-` prefix                    | ✅ Fixed — HSTS/CSP/COOP/CORP                             |
+| SEC-18 | 🟡 Med  |     0      | `zod@3.25.76` memory-exhaustion advisory; `fastify@5.12.5` header-validation bypass        | ✅ Fixed — `zod@4`, `fastify@5.12.8`                      |
+| SEC-19 | 🟡 Med  |     0      | `X-Forwarded-For` hop-count trust feeds both the audit trail and the auth limiter          | ✅ Fixed — `TRUST_PROXY_CIDRS`                            |
+| SEC-20 | 🟡 Med  |     0      | Error handler echoes `error.message` on every 4xx, in every environment                    | ✅ Fixed — opt-in `safeError()`                           |
+| SEC-21 | 🟢 Low  |     1      | `secure` cookie flag only in production; no `__Host-`/`__Secure-` prefixes                 | ✅ Fixed — `__Host-` cookies                              |
+| SEC-22 | 🟢 Low  |     1      | CSRF skip-on-`Authorization` is sound today but couples to CORS; CSRF cookie has no expiry | ✅ Fixed — CSRF cookie expiry                             |
+| SEC-23 | 🟢 Low  |     1      | No session binding or absolute lifetime; password change is unreachable code               | ✅ Fixed — absolute lifetime + revoke-all                 |
+| SEC-24 | 🟢 Low  |     7      | `getInternalToken()` is exported; the key-auth bypass is one string compare                | ✅ Fixed — token no longer exported                       |
+| SEC-25 | 🟢 Low  |     7      | Export writes request `Host` into generated tests; `redact()` doesn't cover `whsec_`       | ✅ Fixed — `PUBLIC_API_URL` + `whsec_` redaction          |
+| SEC-26 | 🟢 Low  |     0      | `docker-compose.yml` ships default credentials and publishes 5432/6379 on all interfaces   | ✅ Fixed — loopback binding                               |
+| SEC-27 | 🟢 Low  |     1      | `SESSION_SECRET` is required and validated but never used                                  | ✅ Fixed — used for session digest                        |
+| SEC-28 | 🟢 Low  |     6      | Chaos benchmark is an unthrottled CPU sampling loop                                        | ✅ Fixed — `SCAN` + bounded caches                        |
 
 **Phase verdicts at a glance**
 
@@ -75,6 +75,8 @@ Severity is assigned on realistic exploitability _in this codebase_, with a note
 |   5   | Analytics & webhooks              | 🔴 The weak phase — SSRF guard does not hold, secret is disclosed, no `/api` limiter   |
 |   6   | Chaos engineering                 | 🟢 Well bounded; minor amplification only                                              |
 |   7   | Playground                        | 🟢 Internal-auth design is sound; third-party script and export details need work      |
+
+These verdicts describe the code **as audited**, before remediation. Phase 5 was the reason for the 🔴; §10 records the fixes and the evidence for each, and the status column in the table above is current.
 
 ---
 
@@ -529,3 +531,151 @@ pnpm audit --prod
 # Unbounded responseHeaders
 #   z.record(z.string().max(200)) with 40 000 keys / 589 KB -> accepted
 ```
+
+---
+
+## 10. Remediation — what was changed, and how it was verified
+
+Every finding above was fixed on this branch. Severity of the _original_ finding is unchanged; the table in §2 records the current state.
+
+Verification was done in three layers, because "it compiles" proves very little about a security fix:
+
+1. **Reproduced the defect first**, then reproduced the _absence_ of the defect after the change (the SSRF bypasses, the `/api` limiter, the header allowlist).
+2. **Regression tests** for logic that does not need external services — 27 cases in `apps/server/tests/security/fixes.test.ts`.
+3. **The full gate**: `pnpm typecheck`, `pnpm lint`, `prettier --check` on touched files, `pnpm audit`, and `next build`.
+
+### 10.1 Dependency advisories — `pnpm audit` is now clean
+
+| Package       | Before         | After   | Note                                                                             |
+| :------------ | :------------- | :------ | :------------------------------------------------------------------------------- |
+| `next`        | 15.5.27        | 15.5.29 | Image-optimizer RCE (SEC-01)                                                     |
+| `drizzle-orm` | 0.38.4         | 0.45.4  | Identifier-escaping advisory (SEC-06); `drizzle-kit` → 0.31.11                   |
+| `fastify`     | 5.12.5         | 5.12.8  | Header-validation bypass (SEC-18)                                                |
+| `zod`         | 3.25.76        | 4.6.7   | Memory-exhaustion advisory; one API change needed (§10.9)                        |
+| `vitest`      | 2.1.x          | 5.1.2   | Critical advisories in `vitest`/`tinypool`/`vite` (dev only)                     |
+| `postcss`     | 8.4.31, 8.5.28 | 8.5.28  | Override — Next pins 8.4.31 exactly                                              |
+| `fast-uri`    | 3.1.8, 4.2.1   | 4.2.4   | Via ajv                                                                          |
+| `qs`          | 6.16.0         | 6.17.1  | Via supertest → superagent                                                       |
+| `esbuild`     | 0.18.20        | 0.25.12 | Via `@esbuild-kit/esm-loader` in drizzle-kit                                     |
+| `minimatch`   | 3.1.5, 10.2.6  | 11.0.9  | Via eslint; override scoped to `<11.0.1` so a future types package is unaffected |
+
+`@stoplight/elements` was **removed** as a dependency. It called `ReactDOM.render`, which React 19 removed, so importing it broke `next build`; and as a devDependency it dragged in advisories (`react-router` 6, `@sentry/browser` 6, `lodash`, `uuid`) for a package the build never used. It is now loaded from the CDN at an **exact version with an SRI hash** (§10.7).
+
+### 10.2 SEC-02 — the SSRF guard (the one that mattered)
+
+The old guard matched hostname prefixes. It missed `[::ffff:127.0.0.1]`, `[::ffff:7f00:1]`, `[64:ff9b::7f00:1]`, and every redirect. The guard was rewritten and then **wired into delivery** — the original was only called on create, so a webhook could be registered against a resolved-at-create-time host and deliver later.
+
+Re-run of the bypass set, after the fix (from `webhookGuard.ts` directly):
+
+```
+blocked  http://2130706433:8080/            <- Loopback IP addresses are not permitted
+blocked  http://0x7f000001:8080/            <- Loopback IP addresses are not permitted
+blocked  http://127.1:8080/                 <- Loopback IP addresses are not permitted
+blocked  http://[::1]:8080/                 <- Loopback IP addresses are not permitted
+blocked  http://[::ffff:127.0.0.1]:8080/    <- Loopback ... (via IPv4-mapped IPv6 127.0.0.1)
+blocked  http://[::ffff:7f00:1]:8080/       <- Loopback ... (via IPv4-mapped IPv6 127.0.0.1)
+blocked  http://[64:ff9b::7f00:1]:8080/     <- Loopback ... (via NAT64 IPv6 127.0.0.1)
+blocked  http://[::ffff:169.254.169.254]/   <- Link-local ... (via IPv4-mapped IPv6 169.254.169.254)
+blocked  http://169.254.169.254/            <- Link-local and cloud metadata addresses are not permitted
+blocked  http://[fd00::1]/                  <- Private IPv6 addresses (unique local) are not permitted
+blocked  http://[fe80::1]/                  <- Link-local IPv6 addresses are not permitted
+bypasses remaining: 0
+```
+
+Delivery now resolves the target to a **pinned address** and connects to that address directly over `node:http(s)`, with `servername` set from the original hostname so TLS still validates against the certificate name. Redirects are refused rather than followed. Dispatching at a loopback redirector now returns:
+
+```
+{"success":false,"error":"Blocked by the webhook egress guard: Loopback IP addresses are not permitted"}
+leaked internal data? false
+```
+
+**A second defect was found while verifying this one.** `URL.hostname` keeps the brackets on an IPv6 literal (`[::1]`, not `::1`), so `isIP()` returned 0 for every IPv6 literal and all of them fell through to the _hostname_ checks. That failed closed — but with the wrong reason, and it made a legitimate IPv6 destination impossible to reach. The brackets are now stripped before classification, which is why the reasons above are specific. Covered by two tests that assert the classification, not just the verdict.
+
+### 10.3 SEC-04 — sessions had no deadline
+
+`resolveSession` decoded a Redis record and trusted it. Nothing compared `expiresAt` to the clock, so a record written once stayed valid for as long as Redis held it. The record now carries an absolute deadline that is checked on **every** read, and a record with no deadline at all is treated as untrusted and falls back to Postgres rather than being read as "valid forever".
+
+`hashSessionToken(token, key)` is now keyed with `SESSION_SECRET` (SEC-27 — the variable was validated at boot and then never used), and revocation is broadcast over `session:revoked` so a logout on one instance takes effect on all of them.
+
+### 10.4 SEC-05 / SEC-08 — rate limiting
+
+The credential limiter was an in-process `Map`, and it was **disabled** in the test environment — which is the environment that runs the suites. An attacker with N connections across M instances got N×M attempts. It now uses the existing Redis sliding-window script (with a `NOSCRIPT` retry after a Redis restart) and falls back to the in-process bucket when Redis is not connected. Tests raise the ceiling instead of turning the limiter off, so the code path is exercised.
+
+A separate per-user bucket now applies to `/api`, and the auth routes were pulled out of it so they are counted once, by their own stricter limiter. Verified against a real server: with `API_RATE_LIMIT_MAX=10`,
+
+```
+statuses: 401,401,401,401,401,401,401,401,401,401,429,429,429
+final body: {"error":"rate_limited","message":"Too many requests. Please slow down and try again."}
+retry-after: 60   remaining: 0
+auth route after /api bucket exhausted -> 200
+```
+
+The `count(*)` half of SEC-08 was a full-table aggregate; it is now bounded to a 30-day window so the index is usable.
+
+### 10.5 SEC-10 / SEC-12 / SEC-28 — caches and unbounded growth
+
+`secretHash` is **no longer stored in Redis**. A cached row carries lifecycle state only; the digest is read from the database on every verification. That keeps a Redis compromise from yielding verifiable credential digests, and it is what lets the cached row be safely invalidated by a broadcast. Invalidation now publishes on `key:invalidated`, so a revoke on one instance takes effect everywhere instead of only in the process that handled it.
+
+`api_key_events` is append-only by design, which is exactly why it needed a bound: a caller who knows a `public_id` (it is not secret — it is the display prefix) could append one row per request, and the rate limiter runs _after_ verification, so it did not cover the path. Failed authentication is now recorded at most once per key/reason/60 s, with the marker in Redis so the suppression is consistent across instances; if Redis is unavailable the event is written, because losing an audit row is worse than a duplicate. Rows older than 90 days are pruned by the existing janitor.
+
+`KEYS` is gone from the chaos cache invalidation path (it walks the whole keyspace and blocks the instance); it uses `SCAN` with `COUNT 200`. The in-process tier cache and the key cache are both bounded with approximate-LRU eviction.
+
+### 10.6 SEC-09 / SEC-23 — a cached role is not an authorization check
+
+The session record carried `orgId` and `role`, written once and then trusted for the life of the session. A demotion, a removal, or a role change took effect only when the session expired, and there was no invalidation path. The role is now read from `org_members` on every request — one indexed lookup, which is cheaper than the wrong answer. The session's preferred org still selects _which_ membership the request acts in; the role always comes from the row.
+
+`/api/auth/password` and `/api/auth/sessions/revoke-all` were added, closing SEC-23's "password change is unreachable code".
+
+### 10.7 SEC-07 — the third-party script
+
+`https://unpkg.com/@stoplight/elements/...` resolves to whatever the registry serves at that moment. That script runs on the dashboard origin and can read the CSRF cookie.
+
+The source is now `https://unpkg.com/@stoplight/elements@9.0.30/...` with `integrity` and `crossOrigin="anonymous"` on both the script and the stylesheet. The version can no longer float, and the browser refuses bytes that do not match the hash. Hashes are in `apps/web/src/lib/stoplightAssets.ts`.
+
+If the bundle cannot load — offline, blocked, or refused by an integrity mismatch — the custom element never registers, so the view now polls for it and shows a message pointing at the other tabs instead of rendering an empty box. **A mistyped hash must not look like a broken dashboard.**
+
+> ⚠️ The SRI hashes were computed from the files installed from `@stoplight/elements@9.0.30`, but unpkg was not reachable from the audit environment to re-download and confirm byte-for-byte. Re-verify with the command in §10.10 before relying on the pinned embed in production. If the hashes do not match, the fallback message appears rather than a broken page.
+
+### 10.8 SEC-11 / SEC-17 / SEC-19 / SEC-20 / SEC-25 — the HTTP layer
+
+| Finding | Change                                                                                                                       | Verified by                                                                     |
+| :------ | :--------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------ |
+| SEC-17  | HSTS (prod only), `default-src 'none'` CSP, `frame-ancestors 'none'`, COOP/CORP, `Permissions-Policy`, `no-store` on `/api`  | header dump from a live server                                                  |
+| SEC-15  | `WEB_ORIGIN` parsed and validated at boot: no `*`, absolute, bare origin, HTTPS in prod                                      | allowed origin echoed; `https://evil.example` returned no CORS header           |
+| SEC-19  | `TRUST_PROXY_HOPS` → `TRUST_PROXY_CIDRS`, an explicit CIDR list validated at boot (an `isIP` check rejects a bare hop count) | `config.test.ts` cases for bad entries and out-of-range prefixes                |
+| SEC-20  | `errorHandler` echoes a message only for errors marked with `safeError()`                                                    | `/leaky` fixture returns a generic body; 415 still returns its friendly message |
+| SEC-11  | `responseHeaders` allowlisted (`x-mock-*` permitted) and capped at 20 keys                                                   | schema tests                                                                    |
+| SEC-25  | Export uses `PUBLIC_API_URL` before the request `Host`; `redact()` covers `whsec_`                                           | `redact` test                                                                   |
+| SEC-24  | `getInternalToken()` removed; the token is module-private and compared as a SHA-256 digest                                   | `isInternalToken` tests                                                         |
+
+### 10.9 Verification results
+
+```
+pnpm typecheck                   4/4 tasks successful
+pnpm lint                        4/4 tasks successful (--max-warnings 0)
+prettier --check <touched files> All matched files use Prettier code style
+pnpm audit                       No known vulnerabilities found
+next build                       ✓ Compiled successfully, 14/14 static pages
+server tests (no DB/Redis)       135 passed, 9 files
+shared tests                     45 passed
+web tests                        16 passed
+```
+
+The suites that need Postgres and Redis were not run: neither service is available in the audit environment and the sandbox has no root to install them. That covers the integration suites (`auth`, `keys`, `analytics`, `playground`, `ratelimit`) and `config/migrations.test.ts`. **They must be run before this branch is considered verified end to end** — in particular the `webhookDeliveries` migration and the outbox drain have no coverage here beyond typechecking and `drizzle-kit generate` reporting no drift.
+
+The five pre-existing unit failures were checked and are environmental, not regressions: `keys/generate.test.ts` ("uses the whole alphabet") failed only on the very first run and passed on three consecutive re-runs; `config.test.ts` requires the env vars the DB-backed suites set.
+
+**One API change from zod 4.** `z.record(valueSchema)` now infers `Record<string, unknown>`; zod 4 requires `z.record(keySchema, valueSchema)`. Two call sites were updated (`routes/playground.ts`, `routes/services.ts`). The rest of the zod surface used here (`object`, `string`, `number`, `enum`, `coerce`, `boolean`, `array`, `unknown`, `refine`, `safeParse`) is unchanged in behaviour, and the 135-test run above confirms the messages and coercion paths still hold.
+
+### 10.10 Regenerating the pinned-asset hashes
+
+```bash
+cd apps/web
+npm pack @stoplight/elements@9.0.30 --pack-destination /tmp
+tar -xzf /tmp/stoplight-elements-9.0.30.tgz -C /tmp
+for f in web-components.min.js styles.min.css; do
+  printf 'sha384-'; openssl dgst -sha384 -binary "/tmp/package/$f" | openssl base64 -A; echo "  $f"
+done
+```
+
+Compare against `apps/web/src/lib/stoplightAssets.ts`. Prefer computing these from the **registry tarball** (as above) over the installed tree, so the hash is tied to the published artifact rather than to whatever a local install produced.

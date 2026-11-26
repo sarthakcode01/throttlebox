@@ -1,12 +1,12 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Role } from '@throttlebox/shared';
 import { roleHasPermission } from '@throttlebox/shared';
 import { db } from '../db/client.js';
 import { orgMembers } from '../db/schema.js';
 import { safeEqualString } from '../util/crypto.js';
-import { resolveSession, updateSessionRecord, CSRF_COOKIE, SESSION_COOKIE } from './session.js';
+import { resolveSession, CSRF_COOKIE, SESSION_COOKIE } from './session.js';
 
 export interface AuthContext {
   userId: string;
@@ -44,40 +44,34 @@ export const authPlugin = fp(async (fastify) => {
     const session = await resolveSession(token);
     if (!session) return;
 
-    let orgId = session.orgId ?? null;
-    let role = (session.role ?? null) as Role | null;
-
-    // If orgId/role are not yet cached in the Redis session, warm from DB once
-    if (!orgId || !role) {
-      const [membership] = await db
-        .select({
-          orgId: orgMembers.orgId,
-          role: orgMembers.role,
-        })
-        .from(orgMembers)
-        .where(eq(orgMembers.userId, session.userId))
-        .orderBy(orgMembers.createdAt)
-        .limit(1);
-
-      orgId = membership?.orgId ?? null;
-      role = (membership?.role ?? null) as Role | null;
-
-      if (orgId && role) {
-        void updateSessionRecord(token, {
-          ...session,
-          orgId,
-          role,
-        }).catch((err) => {
-          request.log.warn({ err }, 'Failed to warm session record cache');
-        });
-      }
-    }
+    // Authorisation is resolved from the database on every request.
+    //
+    // The session record used to carry `orgId` and `role`, written once and
+    // trusted for the life of the session. That made a role change — or a
+    // removed member — take effect only when the session expired, and there was
+    // no invalidation path at all. It is a single indexed read on
+    // `org_members (user_id)`, which is cheaper than the wrong answer.
+    //
+    // The session's preferred `orgId` is used to pick which membership the
+    // request acts in, but the *role* always comes from the row.
+    const [membership] = session.orgId
+      ? await db
+          .select({ orgId: orgMembers.orgId, role: orgMembers.role })
+          .from(orgMembers)
+          .where(and(eq(orgMembers.userId, session.userId), eq(orgMembers.orgId, session.orgId)))
+          .limit(1)
+      : await db
+          .select({ orgId: orgMembers.orgId, role: orgMembers.role })
+          .from(orgMembers)
+          .where(eq(orgMembers.userId, session.userId))
+          .orderBy(orgMembers.createdAt)
+          .limit(1);
 
     request.auth = {
       userId: session.userId,
       sessionId: session.sessionId,
-      orgId,
-      role,
+      orgId: membership?.orgId ?? null,
+      role: (membership?.role ?? null) as Role | null,
     };
   });
 

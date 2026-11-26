@@ -13,7 +13,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.62.11",
     "@throttlebox/shared": "workspace:*",
-    "next": "^15.1.3",
+    "next": "^15.5.29",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -22,6 +22,6 @@
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^5.1.2"
   }
 }

@@ -13,6 +13,50 @@ import {
   updateService,
 } from '../mock/services.js';
 
+/** Upper bound on how many headers one mock route may declare. */
+const MAX_RESPONSE_HEADERS = 20;
+
+/**
+ * Headers a mock author may set on a response.
+ *
+ * Deliberately excludes `content-type` (it is always JSON here), `set-cookie`,
+ * `content-length`, `location`, `refresh` and every hop-by-hop name. Allowing
+ * those would turn a mock route into a redirector, a cookie-setter, or a way to
+ * desynchronise framing.
+ */
+const ALLOWED_RESPONSE_HEADERS = new Set([
+  'cache-control',
+  'content-language',
+  'content-disposition',
+  'etag',
+  'expires',
+  'last-modified',
+  'link',
+  'retry-after',
+  'vary',
+  'x-request-id',
+  'x-total-count',
+  'x-page',
+  'x-page-size',
+]);
+
+function isAllowedResponseHeader(name: string): boolean {
+  const lower = name.toLowerCase().trim();
+  if (lower.startsWith('x-mock-')) return true;
+  return ALLOWED_RESPONSE_HEADERS.has(lower);
+}
+
+function mockErrorStatus(code: MockError['code']): number {
+  switch (code) {
+    case 'not_found':
+      return 404;
+    case 'duplicate':
+      return 409;
+    default:
+      return 400;
+  }
+}
+
 const serviceSchema = z.object({
   name: z.string().min(1).max(80),
   slug: z.string().min(1).max(40).optional(),
@@ -26,23 +70,31 @@ const routeSchema = z.object({
   description: z.string().max(2000).optional(),
   statusCode: z.number().int().min(100).max(599).optional(),
   responseTemplate: z.unknown().optional(),
-  responseHeaders: z.record(z.string().max(200)).optional(),
+  /**
+   * Response headers the mock may set.
+   *
+   * Bounded in both directions. A `z.record` caps each value but not the
+   * number of keys, so a single 589 KB body of 40 000 tiny pairs was accepted,
+   * stored in jsonb, and then set on every subsequent mock response. The names
+   * are allowlisted as well: a template author must not be able to choose
+   * `content-type`, `set-cookie`, or a hop-by-hop header.
+   */
+  responseHeaders: z
+    .record(z.string().min(1).max(200), z.string())
+    .refine(
+      (headers) => Object.keys(headers).length <= MAX_RESPONSE_HEADERS,
+      `At most ${MAX_RESPONSE_HEADERS} response headers are allowed`,
+    )
+    .refine(
+      (headers) => Object.keys(headers).every((name) => isAllowedResponseHeader(name)),
+      'That response header is not allowed',
+    )
+    .optional(),
   latencyMs: z.number().int().min(0).max(30_000).optional(),
   isActive: z.boolean().optional(),
 });
 
 const idSchema = z.object({ id: z.string().uuid() });
-
-function mockErrorStatus(code: MockError['code']): number {
-  switch (code) {
-    case 'not_found':
-      return 404;
-    case 'duplicate':
-      return 409;
-    default:
-      return 400;
-  }
-}
 
 export const serviceRoutes: FastifyPluginAsync = async (fastify) => {
   // ---- Services --------------------------------------------------------

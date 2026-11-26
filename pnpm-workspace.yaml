@@ -11,3 +11,29 @@ onlyBuiltDependencies:
 # must be a boolean.
 allowBuilds:
   esbuild: true
+
+# Dependency pinning for transitive advisories that no direct upgrade can reach.
+# (pnpm 11 reads `overrides` from this file; the `pnpm` field in package.json is
+# no longer consulted.)
+overrides:
+  # Next pins postcss to an exact 8.4.31, which falls in the vulnerable range of
+  # four advisories. Lift every copy to the patched line.
+  postcss: ^8.5.23
+  # ajv accepts fast-uri 3.x, but every 3.x release is affected. 4.x is the
+  # patched line and is API-compatible for the resolver calls ajv makes.
+  fast-uri: ^4.2.4
+  # superagent (via supertest) accepts any 6.x; 6.16.0 is below the patched line.
+  qs: ^6.17.1
+  # drizzle-kit still ships @esbuild-kit/esm-loader, which pins esbuild 0.18 —
+  # below the version where the dev-server request-forwarding issue was fixed.
+  # `drizzle-kit generate` is re-run after this override to confirm it still
+  # works against the 0.25 API.
+  esbuild: ^0.25.12
+  # eslint's config loader and typescript-estree pin minimatch 3.x/10.x; the DoS
+  # is only reachable from lint inputs, but the fix is a drop-in patch bump.
+  minimatch@<11.0.1: ^11.0.9
+
+minimumReleaseAgeExclude:
+  - '@vitest/mocker@5.1.2'
+  - '@vitest/spy@5.1.2'
+  - vitest@5.1.2

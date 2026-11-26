@@ -6,7 +6,8 @@ import {
   setQuotaCheckCallback,
   resetQueueForTesting,
 } from '../../src/analytics/ingest.js';
-import { signPayload, dispatchWebhook, isValidWebhookUrl } from '../../src/analytics/webhooks.js';
+import { signPayload, dispatchWebhook } from '../../src/analytics/webhooks.js';
+import { resolveWebhookTarget } from '../../src/analytics/webhookGuard.js';
 import { db } from '../../src/db/client.js';
 import { requestLogs } from '../../src/db/schema.js';
 
@@ -124,28 +125,44 @@ describe('Webhooks & HMAC Signatures', () => {
     vi.unstubAllGlobals();
   });
 
-  it('rejects SSRF target addresses including private subnets and cloud metadata', () => {
+  it('rejects SSRF target addresses including private subnets and cloud metadata', async () => {
     // Loopback
-    expect(isValidWebhookUrl('http://localhost:8080/hook').valid).toBe(false);
-    expect(isValidWebhookUrl('http://127.0.0.1/hook').valid).toBe(false);
-    expect(isValidWebhookUrl('http://[::1]/hook').valid).toBe(false);
+    expect((await resolveWebhookTarget('http://localhost:8080/hook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://127.0.0.1/hook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://[::1]/hook')).ok).toBe(false);
+
+    // Alternate IPv4 encodings are canonicalised by `new URL()` and then caught
+    expect((await resolveWebhookTarget('http://2130706433/hook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://0x7f000001/hook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://127.1/hook')).ok).toBe(false);
+
+    // IPv4-mapped and NAT64 IPv6 forms — these were the live bypass
+    expect((await resolveWebhookTarget('http://[::ffff:127.0.0.1]/hook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://[::ffff:7f00:1]/hook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://[64:ff9b::7f00:1]/hook')).ok).toBe(false);
+    expect(
+      (await resolveWebhookTarget('http://[::ffff:169.254.169.254]/latest/meta-data')).ok,
+    ).toBe(false);
 
     // Cloud metadata (AWS / GCP / Azure)
-    expect(isValidWebhookUrl('http://169.254.169.254/latest/meta-data').valid).toBe(false);
+    expect((await resolveWebhookTarget('http://169.254.169.254/latest/meta-data')).ok).toBe(false);
 
     // Private RFC 1918 subnets
-    expect(isValidWebhookUrl('http://10.0.0.1/webhook').valid).toBe(false);
-    expect(isValidWebhookUrl('http://172.16.5.10/webhook').valid).toBe(false);
-    expect(isValidWebhookUrl('http://172.31.255.1/webhook').valid).toBe(false);
-    expect(isValidWebhookUrl('http://192.168.1.1/webhook').valid).toBe(false);
+    expect((await resolveWebhookTarget('http://10.0.0.1/webhook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://172.16.5.10/webhook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://172.31.255.1/webhook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://192.168.1.1/webhook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://100.64.0.1/webhook')).ok).toBe(false);
 
-    // Internal domains
-    expect(isValidWebhookUrl('http://service.internal/hook').valid).toBe(false);
-    expect(isValidWebhookUrl('http://app.local/hook').valid).toBe(false);
+    // Internal domains and bare labels (which resolve through search domains)
+    expect((await resolveWebhookTarget('http://service.internal/hook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://app.local/hook')).ok).toBe(false);
+    expect((await resolveWebhookTarget('http://intranet/hook')).ok).toBe(false);
 
-    // Valid public destinations
-    expect(isValidWebhookUrl('https://api.acme.com/webhooks/receiver').valid).toBe(true);
-    expect(isValidWebhookUrl('https://hooks.slack.com/services/T00/B00/X00').valid).toBe(true);
+    // Non-http schemes and embedded credentials
+    expect((await resolveWebhookTarget('file:///etc/passwd')).ok).toBe(false);
+    expect((await resolveWebhookTarget('gopher://example.com/')).ok).toBe(false);
+    expect((await resolveWebhookTarget('https://user:pw@example.com/hook')).ok).toBe(false);
   });
 
   it('blocks dispatch when webhook destination is an SSRF risk', async () => {
@@ -156,6 +173,6 @@ describe('Webhooks & HMAC Signatures', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('Blocked SSRF attempt');
+    expect(result.error).toContain('webhook egress guard');
   });
 });

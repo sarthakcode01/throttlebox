@@ -21,6 +21,37 @@ import {
  * matter what the URL says.
  */
 
+/**
+ * Headers a response template may see.
+ *
+ * An allowlist rather than a denylist: the header set is whatever the client and
+ * the proxies in front of us send, which is not knowable in advance. A denylist
+ * of `authorization`/`cookie` would still miss `x-api-key`,
+ * `x-throttlebox-internal`, or whatever a future middleware adds.
+ */
+const TEMPLATE_HEADERS = new Set([
+  'accept',
+  'accept-language',
+  'content-type',
+  'user-agent',
+  'x-request-id',
+  'if-none-match',
+  'if-match',
+  'cache-control',
+]);
+
+export function templateVisibleHeaders(
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string> {
+  const visible: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase();
+    if (!TEMPLATE_HEADERS.has(lower) || value === undefined) continue;
+    visible[lower] = Array.isArray(value) ? (value[0] ?? '') : value;
+  }
+  return visible;
+}
+
 const MOCK_URL = '/mock/:serviceSlug/*';
 
 /**
@@ -160,7 +191,15 @@ async function renderMockResponse(
     params: match.params,
     query,
     body: options.preview ? options.preview.body : request.body,
-    headers: request.headers as Record<string, string>,
+    // Only the caller's own headers, and only the safe ones.
+    //
+    // The raw `request.headers` object was passed straight through, so a
+    // template could read `authorization`, `cookie` (the dashboard session),
+    // `x-csrf-token`, or any internal header the proxy added — and echo it into
+    // the response body that a third party then reads. Templates are authored
+    // by one member of an org and the rendered output can be handed to anyone,
+    // so the credential must not be reachable from the template at all.
+    headers: templateVisibleHeaders(request.headers),
     // Deterministic, and scoped to the *organization* rather than the key.
     //
     // The mock data belongs to the service, not to the credential: two keys
@@ -204,7 +243,8 @@ export const mockRoutes: FastifyPluginAsync = async (fastify) => {
 
       const latencyMs = Math.round(reply.elapsedTime);
       const rateLimited = reply.statusCode === 429;
-      const traceId = (request.id as string) || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const traceId =
+        (request.id as string) || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const reqExt = request as unknown as { mockServiceId?: string };
       let serviceId = reqExt.mockServiceId ?? null;
 

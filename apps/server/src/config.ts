@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { config as loadEnv } from 'dotenv';
@@ -39,21 +40,44 @@ const schema = z.object({
   AUTH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).max(3600).default(900),
 
   /**
-   * How many reverse proxies sit in front of the app.
+   * Ceiling on the session-authenticated dashboard API, per user.
    *
-   * `0` means the app is reached directly, so `X-Forwarded-For` is ignored
-   * entirely — otherwise any client could spoof its own IP, and the IP is
-   * what the API key audit trail records. Set it to the number of trusted
-   * proxies (typically `1` behind Fly.io, Heroku, or a load balancer).
+   * Generous enough for the dashboard's polling (every chart refetches, and the
+   * playground sends bursts) but low enough that a single account cannot use
+   * the analytics queries as a database load generator.
    */
-  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+  API_RATE_LIMIT_MAX: z.coerce.number().int().min(10).max(100_000).default(600),
+  API_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).max(3600).default(60),
 
-  /** Session lifetime in seconds. Default 7 days. */
+  /**
+   * Comma-separated IPs or CIDR ranges of the reverse proxies in front of the
+   * app, e.g. `10.0.0.0/8,172.16.0.1`.
+   *
+   * Empty (the default) means the app is reached directly, so
+   * `X-Forwarded-For` is ignored entirely — otherwise any client could spoof
+   * its own IP, and that IP is what the API key audit trail records and what
+   * the credential limiter buckets on.
+   *
+   * This replaced a hop count. Counting hops is only correct when exactly N
+   * proxies sit in front and each one appends; set one number too high, or put
+   * the app directly on the internet, and every client can spoof its address
+   * with no warning. An explicit range cannot be wrong in that direction.
+   */
+  TRUST_PROXY_CIDRS: z.string().default(''),
+
+  /**
+   * Session lifetime in seconds. Default 1 day.
+   *
+   * This is an **absolute** lifetime, not a sliding one: the expiry is fixed at
+   * creation and is never extended by use, so a stolen token cannot be kept
+   * alive indefinitely by replaying it.
+   */
   SESSION_TTL_SECONDS: z.coerce
     .number()
     .int()
     .positive()
-    .default(60 * 60 * 24 * 7),
+    .max(60 * 60 * 24 * 30, 'SESSION_TTL_SECONDS may not exceed 30 days')
+    .default(60 * 60 * 24),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -75,5 +99,94 @@ if (config.KEY_PEPPER === config.SESSION_SECRET) {
   );
 }
 
+/**
+ * Validate the trusted-proxy list at boot.
+ *
+ * A typo here silently disables or over-enables client-IP trust, and the value
+ * feeds the audit trail, so an unparseable entry is a startup failure rather
+ * than a warning.
+ */
+export const trustProxyCidrs: string[] = config.TRUST_PROXY_CIDRS.split(',')
+  .map((entry) => entry.trim())
+  .filter(Boolean);
+
+for (const cidr of trustProxyCidrs) {
+  const [address, prefix, ...rest] = cidr.split('/');
+  if (rest.length > 0 || !address) {
+    throw new Error(
+      `Invalid environment configuration:\n  - TRUST_PROXY_CIDRS: '${cidr}' is not an IP or CIDR range`,
+    );
+  }
+  if (isIP(address) === 0) {
+    throw new Error(
+      `Invalid environment configuration:\n  - TRUST_PROXY_CIDRS: '${cidr}' is not an IP or CIDR range`,
+    );
+  }
+  if (prefix !== undefined) {
+    const bits = Number(prefix);
+    const maxBits = isIP(address) === 6 ? 128 : 32;
+    if (!Number.isInteger(bits) || bits < 0 || bits > maxBits) {
+      throw new Error(
+        `Invalid environment configuration:\n  - TRUST_PROXY_CIDRS: '${cidr}' has an invalid prefix length`,
+      );
+    }
+  }
+}
+
 export const isProduction = config.NODE_ENV === 'production';
+
+/**
+ * The allowed dashboard origins.
+ *
+ * Parsed and validated at boot because this list gates credentialed CORS:
+ * `credentials: true` means a cross-origin read of `/api/*` carries the session
+ * cookie. A stray space, a scheme-less entry, or a `*` would silently produce
+ * either a broken dashboard or an allowance nobody intended — and `*` combined
+ * with credentials is a contradiction the browser resolves by rejecting every
+ * request, which looks like an outage rather than a config error.
+ */
+export const webOrigins: string[] = (process.env.WEB_ORIGIN ?? 'http://localhost:3000')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+if (webOrigins.length === 0) {
+  throw new Error(
+    'Invalid environment configuration:\n  - WEB_ORIGIN must name at least one origin',
+  );
+}
+
+for (const origin of webOrigins) {
+  if (origin === '*') {
+    throw new Error(
+      "Invalid environment configuration:\n  - WEB_ORIGIN may not be '*': credentialed CORS needs an explicit origin",
+    );
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    throw new Error(
+      `Invalid environment configuration:\n  - WEB_ORIGIN entry '${origin}' is not an absolute URL`,
+    );
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `Invalid environment configuration:\n  - WEB_ORIGIN entry '${origin}' must be http or https`,
+    );
+  }
+  if (parsed.origin !== origin) {
+    throw new Error(
+      `Invalid environment configuration:\n  - WEB_ORIGIN entry '${origin}' must be a bare origin (no path or trailing slash)`,
+    );
+  }
+  if (isProduction && parsed.protocol !== 'https:') {
+    throw new Error(
+      `Invalid environment configuration:\n  - WEB_ORIGIN entry '${origin}' must use HTTPS in production`,
+    );
+  }
+}
+
 export const isTest = config.NODE_ENV === 'test';

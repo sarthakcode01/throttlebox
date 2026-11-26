@@ -182,11 +182,22 @@ export async function invalidateChaosRule(
 
   try {
     if (!serviceId && !keyId) {
-      // When resetting or modifying org defaults, invalidate all Redis keys for this org
-      const keys = await redis.keys(`chaos:rule:${orgId}:*`);
-      if (keys.length > 0) {
-        await redis.del(...keys);
-      }
+      // When resetting or modifying org defaults, invalidate all Redis keys for
+      // this org. `SCAN` rather than `KEYS`: `KEYS` walks the entire keyspace
+      // and blocks the whole Redis instance for the duration, so a user action
+      // (an org-wide reset) could stall every tenant's limiter.
+      let cursor = '0';
+      do {
+        const [next, found] = await redis.scan(
+          cursor,
+          'MATCH',
+          `chaos:rule:${orgId}:*`,
+          'COUNT',
+          200,
+        );
+        cursor = next;
+        if (found.length > 0) await redis.del(...found);
+      } while (cursor !== '0');
     } else {
       await redis.del(cacheKey);
     }

@@ -1,11 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import {
-  PLAYGROUND_LIMITS,
-  type HttpMethod,
-  type PlaygroundOutcome,
-} from '@throttlebox/shared';
+import { PLAYGROUND_LIMITS, type HttpMethod, type PlaygroundOutcome } from '@throttlebox/shared';
 import { redact } from '../keys/redact.js';
-import { getInternalToken, INTERNAL_AUTH_HEADER, INTERNAL_KEY_ID_HEADER } from './internalAuth.js';
+import { internalAuthHeaders } from './internalAuth.js';
 
 /** 30s chaos latency cap + margin. A request still running after this is reported as an error. */
 export const RUN_TIMEOUT_MS = 35_000;
@@ -33,11 +29,14 @@ const BLOCKED_REQUEST_HEADERS = new Set([
 
 const BLOCKED_RESPONSE_HEADERS = new Set(['set-cookie', 'authorization']);
 
-export function sanitizeRequestHeaders(headers: Record<string, string> = {}): Record<string, string> {
+export function sanitizeRequestHeaders(
+  headers: Record<string, string> = {},
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase().trim();
-    if (!lower || BLOCKED_REQUEST_HEADERS.has(lower) || lower.startsWith('x-throttlebox-')) continue;
+    if (!lower || BLOCKED_REQUEST_HEADERS.has(lower) || lower.startsWith('x-throttlebox-'))
+      continue;
     out[lower] = redact(String(value));
   }
   return out;
@@ -56,7 +55,10 @@ function sanitizeResponseHeaders(
 }
 
 /** Cut text to a byte budget without splitting a multi-byte character. */
-export function truncateToBytes(text: string, maxBytes: number): { text: string; truncated: boolean } {
+export function truncateToBytes(
+  text: string,
+  maxBytes: number,
+): { text: string; truncated: boolean } {
   const buf = Buffer.from(text, 'utf8');
   if (buf.length <= maxBytes) return { text, truncated: false };
   let end = maxBytes;
@@ -121,8 +123,7 @@ export async function runPlaygroundRequest(
     url: buildMockUrl(input.serviceSlug, input.path, input.query),
     headers: {
       ...headers,
-      [INTERNAL_AUTH_HEADER]: getInternalToken(),
-      [INTERNAL_KEY_ID_HEADER]: input.keyId,
+      ...internalAuthHeaders(input.keyId),
     },
     ...(hasBody ? { payload: input.body as string } : {}),
   });
@@ -147,7 +148,10 @@ export async function runPlaygroundRequest(
       };
     }
 
-    const { text, truncated } = truncateToBytes(redact(result.body), PLAYGROUND_LIMITS.maxBodyBytes);
+    const { text, truncated } = truncateToBytes(
+      redact(result.body),
+      PLAYGROUND_LIMITS.maxBodyBytes,
+    );
     return {
       outcome: 'ok',
       status: result.statusCode,

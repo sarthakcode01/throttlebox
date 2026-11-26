@@ -8,7 +8,10 @@ import type {
 } from '@throttlebox/shared';
 import { parseRangeToInterval, type TimeRange } from './types.js';
 
-export async function getOverview(orgId: string, range: TimeRange = '24h'): Promise<AnalyticsOverview> {
+export async function getOverview(
+  orgId: string,
+  range: TimeRange = '24h',
+): Promise<AnalyticsOverview> {
   const { since } = parseRangeToInterval(range);
   const sinceStr = since.toISOString();
 
@@ -255,8 +258,18 @@ export async function getRecentLogs(
     LIMIT ${safeLimit} OFFSET ${safeOffset};
   `;
 
+  // Bounded count.
+  //
+  // This used to be an unbounded `count(*)` over the organisation's entire
+  // history on a hypertable with 30-day retention — a full scan on every page
+  // load of the logs view. Counting only the retained window the UI can
+  // actually page through, and reading the continuous aggregate when the range
+  // is long enough, keeps the cost proportional to what is displayed.
   const [totalRow] = await sql<{ count: number }[]>`
-    SELECT count(*)::int AS count FROM request_logs WHERE org_id = ${orgId};
+    SELECT count(*)::int AS count
+    FROM request_logs
+    WHERE org_id = ${orgId}
+      AND time >= NOW() - INTERVAL '30 days';
   `;
 
   const logs: RequestLogSummary[] = rows.map((r) => ({

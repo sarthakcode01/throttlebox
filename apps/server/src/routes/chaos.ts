@@ -1,23 +1,12 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
-import type {
-  ChaosBenchmarkResult,
-  ChaosRuleConfig,
-} from '@throttlebox/shared';
+import type { ChaosBenchmarkResult, ChaosRuleConfig } from '@throttlebox/shared';
 import { db } from '../db/client.js';
 import { apiKeys, chaosRules, mockServices } from '../db/schema.js';
 import { getServiceBySlug } from '../mock/services.js';
-import {
-  invalidateChaosRule,
-  resolveChaosRule,
-  toChaosRuleConfig,
-} from '../chaos/cache.js';
-import {
-  sampleLatency,
-  shouldDropSocket,
-  shouldInjectError,
-} from '../chaos/sampling.js';
+import { invalidateChaosRule, resolveChaosRule, toChaosRuleConfig } from '../chaos/cache.js';
+import { sampleLatency, shouldDropSocket, shouldInjectError } from '../chaos/sampling.js';
 
 const latencySchema = z
   .object({
@@ -42,7 +31,16 @@ const errorsSchema = z.object({
   enabled: z.boolean(),
   rate5xx: z.number().min(0).max(1.0).default(0),
   rate429: z.number().min(0).max(1.0).default(0),
-  statusCodes: z.array(z.number().int()).default([500, 502, 503, 504]),
+  /**
+   * The status codes an injected 5xx may take.
+   *
+   * Bounded to 400–599 and to eight entries. An unbounded `z.number().int()`
+   * accepted `0`, `99`, or a 6-digit number; those reached `reply.code()` and
+   * threw at response time, turning a configured failure simulation into a 500
+   * for a reason nobody could see. Non-error codes are refused too: a "5xx"
+   * setting that can emit `200` makes the simulation lie.
+   */
+  statusCodes: z.array(z.number().int().min(400).max(599)).max(8).default([500, 502, 503, 504]),
   customMessage: z.string().max(500).optional(),
 });
 
@@ -81,10 +79,7 @@ export const chaosRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const orgId = request.auth!.orgId!;
 
-      const rows = await db
-        .select()
-        .from(chaosRules)
-        .where(eq(chaosRules.orgId, orgId));
+      const rows = await db.select().from(chaosRules).where(eq(chaosRules.orgId, orgId));
 
       const rules = rows.map(toChaosRuleConfig);
 

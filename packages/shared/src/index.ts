@@ -331,14 +331,35 @@ export interface AnalyticsErrorsBreakdown {
   topErrorPaths: { path: string; count: number; statusCode: number }[];
 }
 
+/**
+ * A quota webhook as the client sees it.
+ *
+ * The HMAC signing secret is **write-only**. It is accepted on create, shown
+ * once in the create response, and never returned again — the same rule the
+ * API keys follow. `secretPreview` carries a masked, non-reversible hint so a
+ * user can tell which secret is configured without being able to recover it.
+ */
 export interface WebhookConfig {
   id: string;
   orgId: string;
   url: string;
-  secret: string; // HMAC secret
   isActive: boolean;
   lastAlertedThreshold: number | null;
   createdAt: string;
+  /** Masked hint such as `whsec_ab…4f`. Never the secret itself. */
+  secretPreview: string;
+  /** True when a custom secret was supplied; false when one was generated. */
+  hasCustomSecret: boolean;
+}
+
+/**
+ * The response to creating a webhook.
+ *
+ * This is the only response that carries `secret`, and only when the server
+ * generated it — a caller-supplied secret is already known to the caller.
+ */
+export interface CreateWebhookResponse extends WebhookConfig {
+  secret: string | null;
 }
 
 export interface CreateWebhookRequest {
@@ -428,7 +449,6 @@ export interface ChaosBenchmarkResult {
     count: number;
   }[];
 }
-
 
 // ---------------------------------------------------------------------------
 // Time-Travel Playground (Phase 7)

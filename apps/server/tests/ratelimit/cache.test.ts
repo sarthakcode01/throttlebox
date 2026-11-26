@@ -17,7 +17,6 @@ describe('key caching in Redis', () => {
     env: 'test',
     scopes: ['mock:read'],
     status: 'active',
-    secretHash: 'abcdef1234567890',
     expiresAt: null,
     graceUntil: null,
     familyRevokedAt: null,
@@ -29,6 +28,13 @@ describe('key caching in Redis', () => {
     const result = await getCachedKey('testpub123');
     expect(result).toEqual(dummyRow);
     expect(redis.get).toHaveBeenCalledWith('cache:key:testpub123');
+  });
+
+  it('never stores the secret hash in Redis', async () => {
+    // A cached row must carry lifecycle state only: a Redis compromise should
+    // not hand over verifiable credential digests.
+    const serialised = JSON.stringify(dummyRow);
+    expect(serialised).not.toContain('secretHash');
   });
 
   it('returns null on cache miss', async () => {

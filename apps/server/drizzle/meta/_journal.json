@@ -55,6 +55,13 @@
       "when": 1795204701604,
       "tag": "0007_remarkable_lady_vermin",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795689711808,
+      "tag": "0008_tiny_marvel_zombies",
+      "breakpoints": true
     }
   ],
   "version": "7",

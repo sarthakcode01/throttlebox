@@ -1,3 +1,4 @@
+import { purgeOldAuditEvents } from '../keys/audit.js';
 import { purgeExpiredSessions } from './session.js';
 
 /**
@@ -15,9 +16,19 @@ const CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
 
 let timer: NodeJS.Timeout | null = null;
 
-/** Delete expired sessions once. Exposed so it can be tested directly. */
+/**
+ * Delete expired sessions once, and prune the API key audit trail past its
+ * retention window. Exposed so it can be tested directly.
+ *
+ * The audit trail is append-only by design, which is exactly why it needs a
+ * bound: an unauthenticated caller who knows a `public_id` can add a row per
+ * request, so without retention the table grows for as long as the attack runs.
+ */
 export async function runSessionCleanup(): Promise<number> {
-  return purgeExpiredSessions();
+  const sessions = await purgeExpiredSessions();
+  // A failure to prune must not stop the session sweep.
+  await purgeOldAuditEvents().catch(() => 0);
+  return sessions;
 }
 
 export function startSessionJanitor(): void {
