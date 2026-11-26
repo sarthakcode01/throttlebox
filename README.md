@@ -8,9 +8,12 @@ with usage visualized on a dashboard.
 
 ## Status
 
-Phases 0–3 are done: the monorepo, local infra, custom authentication, API key
-management, and the mock API engine are working. The full plan lives in this
-repo:
+Phases 0–7 are done: the monorepo, local infra, custom authentication, API key
+management, the mock API engine, Redis sliding-window rate limiting, TimescaleDB
+analytics, chaos engineering, and the time-travel playground. Phases 8–10
+(testing/CI hardening, deployment, portfolio polish) remain — see
+[`docs/ROADMAP.md`](./docs/ROADMAP.md) for the current state of each. The full
+plan lives in this repo:
 
 - [`API_DEVELOPER_PORTAL_PLAN.md`](./API_DEVELOPER_PORTAL_PLAN.md) — scope, stack, and step-by-step build process
 - [`PHASES.md`](./PHASES.md) — phase breakdown, dependencies, and milestones
@@ -18,7 +21,8 @@ repo:
 
 ## Getting started
 
-**Prerequisites:** Node 20+, pnpm 11+, Docker Desktop.
+**Prerequisites:** Node 22.13+ (pnpm 11 uses `node:sqlite`; CI runs Node 24),
+pnpm 11+, Docker Desktop.
 
 ```bash
 git clone https://github.com/sarthakcode01/throttlebox.git
@@ -208,8 +212,8 @@ be replayed, because it was only ever shown once.
 | Analytics             | TimescaleDB                                      |
 | Cache / rate limiting | Redis                                            |
 | Auth                  | Custom — Argon2id + Redis-backed sessions        |
-| Tests                 | Vitest + Supertest + Playwright                  |
-| Deploy                | Fly.io (API) + Vercel (frontend)                 |
+| Tests                 | Vitest + Supertest (Playwright planned, Phase 8) |
+| Deploy                | Local Docker Compose (hosting planned, Phase 9)  |
 
 ## Done so far
 
@@ -219,12 +223,26 @@ be replayed, because it was only ever shown once.
   a grace window, family revocation, scopes, audit trail, and a dashboard
 - **Phase 3** — the mock API engine: services, routes, a declarative template
   engine, a seeded E-commerce service, an OpenAPI reference, and a dashboard
+- **Phase 4** — sliding-window rate limiting in Redis Lua, per-plan tiers, and
+  `429` responses with `Retry-After` and rate-limit headers
+- **Phase 5** — request analytics: a `request_logs` hypertable, batched
+  non-blocking ingestion, a `usage_hourly` continuous aggregate, p50/p95/p99
+  latency, and signed HMAC webhooks at the 80% and 100% quota thresholds
+- **Phase 6** — chaos engineering: latency, injected errors, dropped
+  connections, and weighted responses, scoped per organization/service/key
+- **Phase 7** — the time-travel playground: capture, replay, fork, structural
+  JSON diff, and export to a runnable Vitest file or a Postman collection
 
-## Planned features
+## Remaining
 
-- Sliding-window rate limiting via Redis Lua
-- Request analytics with p50/p95/p99 latency
-- Chaos engineering controls (latency, errors, dropped connections)
+- **Phase 8** — testing & CI hardening: Playwright E2E, testcontainers
+  integration, coverage gates, nightly k6 smoke
+- **Phase 9** — deployment: Dockerfile, hosted API + frontend, Sentry, a seeded
+  demo organization
+- **Phase 10** — portfolio polish: ADRs, postmortem, demo video
+
+> No Dockerfile exists yet and nothing is deployed; the local
+> `docker compose` stack is the only supported way to run this today.
 
 ## License
 

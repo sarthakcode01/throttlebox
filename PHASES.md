@@ -29,7 +29,11 @@ flowchart LR
 
 ## Track A — Shippable Core (target: day ~35)
 
-### Phase 0 — Foundation · Days 1–2
+> ✅ done · 🎯 differentiator · ⬜ not started. A phase has its own **Done** or
+> **State** row; where the two disagree, the row is the record and the heading
+> marker is only a summary.
+
+### Phase 0 — Foundation · Days 1–2 ✅
 
 |                   |                                                                                                                                                                                                                                          |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -38,7 +42,7 @@ flowchart LR
 | **Exit criteria** | `pnpm dev` runs both apps; containers healthy; CI green on day one                                                                                                                                                                       |
 | **Risk**          | Low                                                                                                                                                                                                                                      |
 
-### Phase 1 — Auth & Organizations · Days 3–5
+### Phase 1 — Auth & Organizations · Days 3–5 ✅
 
 |                   |                                                                                                                                                                                                                                                                                                                                                              |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -83,22 +87,23 @@ flowchart LR
 
 ### Phase 5 — Analytics & TimescaleDB · Days 21–27 ⭐ ✅
 
-|                   |                                                                                                                                                                                                                                                      |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|                   |                                                                                                                                                                                                                                                                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Deliverables**  | `request_logs` hypertable + indexes, non-blocking batched ingestion buffer (500ms / 100 rows), continuous aggregate `usage_hourly` for latency percentiles and volume, analytics query service (`/api/analytics/*`), interactive React 19 SVG dashboard, signed HMAC-SHA256 quota webhooks (80% and 100% threshold monitoring) |
-| **Deps**          | Phase 4 (needs `rate_limited`, `key_id`, latency data flowing)                                                                                                                                                                                       |
-| **Exit criteria** | Traffic → charts populate from aggregates; webhook fires at 80% & 100%; p95 flat at 1M rows                                                                                                                                                                 |
-| **Risk**          | High — backpressure and insert batching; the de-facto postmortem story                                                                                                                                                                               |
-| **Done**          | 2026-11-02 — 159 server tests passing across 15 test suites; full TimescaleDB continuous aggregate integration, non-blocking Fastify `onResponse` telemetry hook, and responsive dark-theme dashboard at `/dashboard/analytics`.                        |
+| **Deps**          | Phase 4 (needs `rate_limited`, `key_id`, latency data flowing)                                                                                                                                                                                                                                                                 |
+| **Exit criteria** | Traffic → charts populate from aggregates; webhook fires at 80% & 100%; p95 flat at 1M rows                                                                                                                                                                                                                                    |
+| **Risk**          | High — backpressure and insert batching; the de-facto postmortem story                                                                                                                                                                                                                                                         |
+| **Done**          | 2026-11-02 — 159 server tests passing across 15 test suites; full TimescaleDB continuous aggregate integration, non-blocking Fastify `onResponse` telemetry hook, and responsive dark-theme dashboard at `/dashboard/analytics`.                                                                                               |
 
-### Phase 9 — Deployment · Days 45–48 (pulled forward for MVP)
+### Phase 9 — Deployment · Days 45–48 (pulled forward for MVP) ⬜
 
 |                   |                                                                                                                                                                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Deliverables**  | Dockerfile (multi-stage, non-root, healthcheck), API on Fly.io/Railway, Upstash + Neon/Supabase, frontend on Vercel, CORS lockdown, separate dashboard-API limiter, pino + Sentry, CI secret scanning, seeded demo org with 30 days of data |
 | **Exit criteria** | Clean browser → live URL works end-to-end; demo dashboard looks alive                                                                                                                                                                       |
+| **State**         | ⬜ Not started. No `Dockerfile` exists in the repository and there is no hosting configuration, so the local `docker compose` stack is the only way to run this.                                                                            |
 
-### Phase 10 — Portfolio Polish · Days 49–56 (MVP-complete)
+### Phase 10 — Portfolio Polish · Days 49–56 (MVP-complete) ⬜
 
 |                   |                                                                                                                                       |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
@@ -111,32 +116,33 @@ flowchart LR
 
 ### Phase 6 — Chaos Engineering Controls · Days 28–32 🎯 ✅
 
-|                   |                                                                                                                                                                                                   |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|                   |                                                                                                                                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Deliverables**  | Per-key/org chaos config in Redis, middleware injecting sampled latency / 5xx / 429 / socket drops, dashboard sliders (5s read-through cache), self-demonstrating resilience test page with histogram |
-| **Deps**          | Phase 4 pipeline (inserted before the route handler)                                                                                                                                              |
-| **Exit criteria** | 5% error rate → ~5 failures per 100 requests, correct distribution                                                                                                                                |
-| **Risk**          | Medium — the `weighted_responses` column in Phase 3 exists for this                                                                                                                               |
-| **Done**          | 2026-11-14 — Box-Muller Gaussian latency jitter, true TCP socket termination (`request.raw.destroy()`), Redis pub/sub invalidation, Fastify middleware, and interactive resilience test studio.    |
+| **Deps**          | Phase 4 pipeline (inserted before the route handler)                                                                                                                                                  |
+| **Exit criteria** | 5% error rate → ~5 failures per 100 requests, correct distribution                                                                                                                                    |
+| **Risk**          | Medium — the `weighted_responses` column in Phase 3 exists for this                                                                                                                                   |
+| **Done**          | 2026-11-14 — Box-Muller Gaussian latency jitter, true TCP socket termination (`request.raw.destroy()`), Redis pub/sub invalidation, Fastify middleware, and interactive resilience test studio.       |
 
-### Phase 7 — Time-Travel Playground · Days 33–39 🎯
+### Phase 7 — Time-Travel Playground · Days 33–39 🎯 ✅
 
-|                   |                                                                                                                                                                                                            |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Deliverables**  | `playground_sessions` / `playground_requests` capture, in-app request runner (Monaco) reusing the real pipeline, replay + fork, JSON deep-diff side-by-side, export to Vitest snapshot / OpenAPI / Postman |
-| **Deps**          | Phases 3, 5, 6                                                                                                                                                                                             |
-| **Exit criteria** | Send → toggle chaos → replay → diff → exported test passes locally                                                                                                                                         |
+|                   |                                                                                                                                                                                                                                                                                           |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Deliverables**  | `playground_sessions` / `playground_requests` capture, in-app request runner (Monaco) reusing the real pipeline, replay + fork, JSON deep-diff side-by-side, export to Vitest snapshot / OpenAPI / Postman                                                                                |
+| **Deps**          | Phases 3, 5, 6                                                                                                                                                                                                                                                                            |
+| **Exit criteria** | Send → toggle chaos → replay → diff → exported test passes locally                                                                                                                                                                                                                        |
 | **Done**          | 2026-11-20 — in-process runner through the real pipeline (internal per-boot token, no raw keys stored), capture/replay/fork, structural JSON diff, Vitest + Postman export with an end-to-end test that runs the generated file, `/dashboard/playground`. Monaco deferred (plain editor). |
-| **Risk**          | High — the largest surface area; ship 7.1–7.4 first, treat 7.5 as the bonus                                                                                                                                |
+| **Risk**          | High — the largest surface area; ship 7.1–7.4 first, treat 7.5 as the bonus                                                                                                                                                                                                               |
 
-### Phase 8 — Testing & CI Hardening · Days 40–44
+### Phase 8 — Testing & CI Hardening · Days 40–44 ⬜
 
-|                   |                                                                                                                                                                      |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Deliverables**  | Vitest units (limiter boundaries, renderer, key auth), Supertest integration against real Redis via testcontainers, Playwright E2E, full CI matrix, nightly k6 smoke |
-| **Deps**          | All feature phases                                                                                                                                                   |
-| **Exit criteria** | >80% coverage on limiter/auth/template; red test blocks merge                                                                                                        |
-| **Note**          | Written tests are _not_ deferred to the end — this phase consolidates what each phase adds as it goes                                                                |
+|                   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Deliverables**  | Vitest units (limiter boundaries, renderer, key auth), Supertest integration against real Redis via testcontainers, Playwright E2E, full CI matrix, nightly k6 smoke                                                                                                                                                                                                                                                                                                                                          |
+| **Deps**          | All feature phases                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **Exit criteria** | >80% coverage on limiter/auth/template; red test blocks merge                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Note**          | Written tests are _not_ deferred to the end — this phase consolidates what each phase adds as it goes                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **State**         | ⬜ Not started as a phase, but partly covered by earlier work. Verified present: 33 test suites (29 server, 1 web, 3 shared), a CI workflow that runs real Postgres + Redis service containers, and `pnpm test`/`typecheck`/`lint`/`build` in the job. Verified absent: Playwright, testcontainers, any coverage threshold, and a k6 smoke test. CI is also red before this phase's work begins — `format:check` is repo-wide and 28 committed files are unformatted, so the job stops before typecheck runs. |
 
 ---
 
